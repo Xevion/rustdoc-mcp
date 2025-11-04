@@ -37,6 +37,12 @@ pub struct UptimeTimer {
     start: Instant,
 }
 
+impl Default for UptimeTimer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UptimeTimer {
     pub fn new() -> Self {
         Self {

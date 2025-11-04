@@ -1,6 +1,6 @@
 use cargo_doc_mcp::cargo::UptimeTimer;
 use cargo_doc_mcp::cli::Cli;
-use cargo_doc_mcp::commands;
+use cargo_doc_mcp::handlers::legacy;
 use clap::Parser;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -22,7 +22,7 @@ async fn main() {
 
     let cli = Cli::parse();
 
-    if let Err(e) = commands::run(cli).await {
+    if let Err(e) = legacy::run(cli).await {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }

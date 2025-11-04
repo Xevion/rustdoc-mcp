@@ -182,11 +182,10 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     println!("{}. {}", count, result.name);
                     println!("   Path: {}", result.path);
 
-                    if is_multi_crate {
-                        if let Some(source_crate) = &result.source_crate {
+                    if is_multi_crate
+                        && let Some(source_crate) = &result.source_crate {
                             println!("   Crate: {}", source_crate);
                         }
-                    }
 
                     let doc = if let Some(source_crate) = &result.source_crate {
                         loaded_crates.iter()
@@ -196,8 +195,8 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         None
                     };
 
-                    if let Some(doc) = doc {
-                        if let Some(id) = &result.id {
+                    if let Some(doc) = doc
+                        && let Some(id) = &result.id {
                             if let Some(item) = doc.get_item(id) {
                                 if let Some(sig) = doc.format_function_signature(item) {
                                     println!("   Signature: {}", sig);
@@ -212,15 +211,12 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
+                            } else if let Some(crate_name) = &result.crate_name {
+                                println!("   From: {} (external - signature details not available)", crate_name);
                             } else {
-                                if let Some(crate_name) = &result.crate_name {
-                                    println!("   From: {} (external - signature details not available)", crate_name);
-                                } else {
-                                    println!("   (external - signature details not available)");
-                                }
+                                println!("   (external - signature details not available)");
                             }
                         }
-                    }
                     println!();
                 }
 

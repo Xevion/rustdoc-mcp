@@ -65,11 +65,10 @@ impl DocIndex {
         let mut results = Vec::new();
 
         for item in self.index.values() {
-            if let Some(kind_filter) = filter_kind {
-                if !matches_kind(&item.inner, kind_filter) {
+            if let Some(kind_filter) = filter_kind
+                && !matches_kind(&item.inner, kind_filter) {
                     continue;
                 }
-            }
 
             if let Some(name) = &item.name {
                 let name_lower = name.to_lowercase();
@@ -81,7 +80,7 @@ impl DocIndex {
                         kind: item_kind_str(&item.inner).to_string(),
                         crate_name: None,
                         docs: item.docs.clone(),
-                        id: Some(item.id.clone()),
+                        id: Some(item.id),
                         relevance,
                         source_crate: None,
                     });
@@ -118,7 +117,7 @@ impl DocIndex {
                         kind: format!("{:?}", summary.kind).to_lowercase(),
                         crate_name,
                         docs: None,
-                        id: Some(id.clone()),
+                        id: Some(*id),
                         relevance,
                         source_crate: None,
                     });
@@ -245,7 +244,7 @@ impl DocIndex {
                     .generics
                     .params
                     .iter()
-                    .map(|param| format_generic_param(param))
+                    .map(format_generic_param)
                     .collect();
                 sig.push_str(&generic_names.join(", "));
                 sig.push('>');

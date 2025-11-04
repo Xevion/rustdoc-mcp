@@ -1,6 +1,6 @@
 pub mod cargo;
 pub mod cli;
-pub mod commands;
+pub mod handlers;
 pub mod doc;
 pub mod types;
 
