@@ -22,19 +22,24 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if crate_override.is_some() {
-                info!("Searching specified crates: {}", loaded_crates
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "));
+                info!(
+                    "Searching specified crates: {}",
+                    loaded_crates
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             } else {
-                info!("Auto-detected {} crate(s) from Cargo.toml: {}",
+                info!(
+                    "Auto-detected {} crate(s) from Cargo.toml: {}",
                     loaded_crates.len(),
                     loaded_crates
                         .iter()
                         .map(|(name, _)| name.as_str())
                         .collect::<Vec<_>>()
-                        .join(", "));
+                        .join(", ")
+                );
             }
             if !failed_crates.is_empty() {
                 info!("{} crate(s) failed to load", failed_crates.len());
@@ -80,19 +85,24 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if crate_override.is_some() {
-                info!("Searching specified crates: {}", loaded_crates
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "));
+                info!(
+                    "Searching specified crates: {}",
+                    loaded_crates
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             } else {
-                info!("Auto-detected {} crate(s) from Cargo.toml: {}",
+                info!(
+                    "Auto-detected {} crate(s) from Cargo.toml: {}",
                     loaded_crates.len(),
                     loaded_crates
                         .iter()
                         .map(|(name, _)| name.as_str())
                         .collect::<Vec<_>>()
-                        .join(", "));
+                        .join(", ")
+                );
             }
             if !failed_crates.is_empty() {
                 info!("{} crate(s) failed to load", failed_crates.len());
@@ -130,7 +140,9 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("  • The type is not publicly exported");
                 println!("  • You need to check the exact name (case-sensitive)");
             } else if is_multi_crate {
-                println!("Tip: The first path in each crate is usually the most canonical/preferred.");
+                println!(
+                    "Tip: The first path in each crate is usually the most canonical/preferred."
+                );
             }
         }
 
@@ -148,30 +160,40 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if crate_override.is_some() {
-                info!("Searching specified crates: {}", loaded_crates
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "));
+                info!(
+                    "Searching specified crates: {}",
+                    loaded_crates
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             } else {
-                info!("Auto-detected {} crate(s) from Cargo.toml: {}",
+                info!(
+                    "Auto-detected {} crate(s) from Cargo.toml: {}",
                     loaded_crates.len(),
                     loaded_crates
                         .iter()
                         .map(|(name, _)| name.as_str())
                         .collect::<Vec<_>>()
-                        .join(", "));
+                        .join(", ")
+                );
             }
             if !failed_crates.is_empty() {
                 info!("{} crate(s) failed to load", failed_crates.len());
             }
 
-            let results = search_multiple_crates(&loaded_crates, &function_name, Some(ItemKind::Function));
+            let results =
+                search_multiple_crates(&loaded_crates, &function_name, Some(ItemKind::Function));
 
             if results.is_empty() {
                 println!("No functions found matching '{}'", function_name);
             } else {
-                println!("Found {} function(s) matching '{}':", results.len(), function_name);
+                println!(
+                    "Found {} function(s) matching '{}':",
+                    results.len(),
+                    function_name
+                );
                 println!();
 
                 let is_multi_crate = loaded_crates.len() > 1;
@@ -182,13 +204,13 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     println!("{}. {}", count, result.name);
                     println!("   Path: {}", result.path);
 
-                    if is_multi_crate
-                        && let Some(source_crate) = &result.source_crate {
-                            println!("   Crate: {}", source_crate);
-                        }
+                    if is_multi_crate && let Some(source_crate) = &result.source_crate {
+                        println!("   Crate: {}", source_crate);
+                    }
 
                     let doc = if let Some(source_crate) = &result.source_crate {
-                        loaded_crates.iter()
+                        loaded_crates
+                            .iter()
                             .find(|(name, _)| name == source_crate)
                             .map(|(_, doc)| doc)
                     } else {
@@ -196,27 +218,31 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     if let Some(doc) = doc
-                        && let Some(id) = &result.id {
-                            if let Some(item) = doc.get_item(id) {
-                                if let Some(sig) = doc.format_function_signature(item) {
-                                    println!("   Signature: {}", sig);
-                                }
+                        && let Some(id) = &result.id
+                    {
+                        if let Some(item) = doc.get_item(id) {
+                            if let Some(sig) = doc.format_function_signature(item) {
+                                println!("   Signature: {}", sig);
+                            }
 
-                                if let Some(docs) = &item.docs {
-                                    let preview: Vec<_> = docs.lines().take(2).collect();
-                                    if !preview.is_empty() {
-                                        println!("   Docs:");
-                                        for line in preview {
-                                            println!("     {}", line);
-                                        }
+                            if let Some(docs) = &item.docs {
+                                let preview: Vec<_> = docs.lines().take(2).collect();
+                                if !preview.is_empty() {
+                                    println!("   Docs:");
+                                    for line in preview {
+                                        println!("     {}", line);
                                     }
                                 }
-                            } else if let Some(crate_name) = &result.crate_name {
-                                println!("   From: {} (external - signature details not available)", crate_name);
-                            } else {
-                                println!("   (external - signature details not available)");
                             }
+                        } else if let Some(crate_name) = &result.crate_name {
+                            println!(
+                                "   From: {} (external - signature details not available)",
+                                crate_name
+                            );
+                        } else {
+                            println!("   (external - signature details not available)");
                         }
+                    }
                     println!();
                 }
 
@@ -225,21 +251,91 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+
+        Commands::TypeDef {
+            type_name,
+            crate_override,
+            limit,
+        } => {
+            use crate::format;
+            use crate::handlers::get_type_definition;
+
+            let crates = crate_override.as_ref().map(|c| parse_crate_list(c));
+
+            match get_type_definition::handle(&type_name, crates, Some(limit)).await {
+                Ok((definitions, loaded_crates)) => {
+                    if definitions.is_empty() {
+                        println!("No types found matching '{}'", type_name);
+                    } else {
+                        println!(
+                            "Found {} type(s) matching '{}':\n",
+                            definitions.len(),
+                            type_name
+                        );
+
+                        for (idx, def) in definitions.iter().enumerate() {
+                            if idx > 0 {
+                                println!("\n{}", "=".repeat(80));
+                                println!();
+                            }
+
+                            // Find the DocIndex for this definition
+                            if let Some((_, doc)) = loaded_crates
+                                .iter()
+                                .find(|(name, _)| name == &def.source_crate)
+                            {
+                                match format::format_type_as_rust(def, doc) {
+                                    Ok(formatted) => {
+                                        println!("{}", formatted);
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to format type '{}' as Rust syntax: {}",
+                                            def.name, e
+                                        );
+                                        // Try to generate the unformatted output for debugging
+                                        if let Ok(unformatted) =
+                                            format::generate_rust_syntax(def, doc)
+                                        {
+                                            warn!(
+                                                "Generated (unformatted) output:\n{}",
+                                                unformatted
+                                            );
+                                        }
+                                        // Fallback to simple display
+                                        println!("{} {} ({})", def.kind, def.name, def.path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to get type definition: {}", e);
+                    return Err(e);
+                }
+            }
+        }
     }
 
     Ok(())
 }
 
-pub fn resolve_crates(override_crates: Option<String>) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+pub fn resolve_crates(
+    override_crates: Option<String>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     if let Some(crates_str) = override_crates {
         Ok(parse_crate_list(&crates_str))
     } else {
-        let cargo_toml = find_cargo_toml().ok_or("Could not find Cargo.toml in current directory or any parent directory")?;
+        let cargo_toml = find_cargo_toml()
+            .ok_or("Could not find Cargo.toml in current directory or any parent directory")?;
 
         let crates = extract_dependencies(&cargo_toml)?;
 
         if crates.is_empty() {
-            warn!("No dependencies found in Cargo.toml. You can specify crates manually with: --crate <crate1>,<crate2>");
+            warn!(
+                "No dependencies found in Cargo.toml. You can specify crates manually with: --crate <crate1>,<crate2>"
+            );
         }
 
         Ok(crates)
@@ -254,11 +350,16 @@ pub fn parse_crate_list(input: &str) -> Vec<String> {
         .collect()
 }
 
-pub async fn load_multiple_crates(crate_names: &[String]) -> (Vec<(String, DocIndex)>, Vec<String>) {
+pub async fn load_multiple_crates(
+    crate_names: &[String],
+) -> (Vec<(String, DocIndex)>, Vec<String>) {
     let version_map = match get_resolved_versions() {
         Ok(map) => map,
         Err(e) => {
-            warn!("Failed to get cargo metadata: {}, continuing without version resolution", e);
+            warn!(
+                "Failed to get cargo metadata: {}, continuing without version resolution",
+                e
+            );
             HashMap::new()
         }
     };

@@ -270,18 +270,71 @@ impl DocIndex {
         }
     }
 
-    fn format_type(&self, ty: &Type) -> String {
+    pub fn format_type(&self, ty: &Type) -> String {
+        self.format_type_impl(ty, false)
+    }
+
+    /// Format a type for use in generated Rust syntax (uses valid placeholders)
+    pub fn format_type_for_syntax(&self, ty: &Type) -> String {
+        self.format_type_impl(ty, true)
+    }
+
+    fn format_type_impl(&self, ty: &Type, for_syntax: bool) -> String {
         match ty {
             Type::ResolvedPath(path) => {
                 if let Some(summary) = self.krate.paths.get(&path.id) {
                     let name = summary.path.last().unwrap_or(&"?".to_string()).clone();
-                    if path.args.is_some() {
-                        format!("{}<...>", name)
+                    if let Some(args) = &path.args {
+                        // Try to format generic arguments
+                        match args.as_ref() {
+                            rustdoc_types::GenericArgs::AngleBracketed { args, constraints } => {
+                                if args.is_empty() && constraints.is_empty() {
+                                    name
+                                } else {
+                                    let arg_strs: Vec<String> = args.iter().map(|arg| {
+                                        match arg {
+                                            rustdoc_types::GenericArg::Lifetime(lt) => lt.clone(),
+                                            rustdoc_types::GenericArg::Type(t) => self.format_type_impl(t, for_syntax),
+                                            rustdoc_types::GenericArg::Const(c) => format!("{{{}}}", c.expr),
+                                            rustdoc_types::GenericArg::Infer => "_".to_string(),
+                                        }
+                                    }).collect();
+
+                                    if arg_strs.is_empty() {
+                                        // If we have constraints but no args, show a placeholder
+                                        if for_syntax {
+                                            format!("{}<_>", name)  // Valid syntax placeholder
+                                        } else {
+                                            format!("{}<...>", name)  // Readable placeholder
+                                        }
+                                    } else {
+                                        format!("{}<{}>", name, arg_strs.join(", "))
+                                    }
+                                }
+                            }
+                            rustdoc_types::GenericArgs::Parenthesized { inputs, output } => {
+                                let input_strs: Vec<String> = inputs.iter().map(|t| self.format_type_impl(t, for_syntax)).collect();
+                                let mut result = format!("{}({})", name, input_strs.join(", "));
+                                if let Some(out) = output {
+                                    result.push_str(" -> ");
+                                    result.push_str(&self.format_type_impl(out, for_syntax));
+                                }
+                                result
+                            }
+                            rustdoc_types::GenericArgs::ReturnTypeNotation => {
+                                // Return type notation (..): Not commonly used, treat as name only
+                                name
+                            }
+                        }
                     } else {
                         name
                     }
                 } else {
-                    "<type>".to_string()
+                    if for_syntax {
+                        "()".to_string()  // Valid unit type placeholder
+                    } else {
+                        "<type>".to_string()
+                    }
                 }
             }
             Type::Generic(name) => name.clone(),
@@ -299,29 +352,47 @@ impl DocIndex {
                 if *is_mutable {
                     s.push_str("mut ");
                 }
-                s.push_str(&self.format_type(type_));
+                s.push_str(&self.format_type_impl(type_, for_syntax));
                 s
             }
             Type::Tuple(types) => {
                 if types.is_empty() {
                     "()".to_string()
                 } else {
-                    let formatted: Vec<_> = types.iter().map(|t| self.format_type(t)).collect();
+                    let formatted: Vec<_> = types.iter().map(|t| self.format_type_impl(t, for_syntax)).collect();
                     format!("({})", formatted.join(", "))
                 }
             }
-            Type::Slice(inner) => format!("[{}]", self.format_type(inner)),
-            Type::Array { type_, len } => format!("[{}; {}]", self.format_type(type_), len),
+            Type::Slice(inner) => format!("[{}]", self.format_type_impl(inner, for_syntax)),
+            Type::Array { type_, len } => format!("[{}; {}]", self.format_type_impl(type_, for_syntax), len),
             Type::RawPointer { is_mutable, type_ } => {
                 if *is_mutable {
-                    format!("*mut {}", self.format_type(type_))
+                    format!("*mut {}", self.format_type_impl(type_, for_syntax))
                 } else {
-                    format!("*const {}", self.format_type(type_))
+                    format!("*const {}", self.format_type_impl(type_, for_syntax))
                 }
             }
-            Type::FunctionPointer(_) => "fn(...)".to_string(),
-            Type::QualifiedPath { .. } => "<qualified path>".to_string(),
-            _ => "<type>".to_string(),
+            Type::FunctionPointer(_) => {
+                if for_syntax {
+                    "fn()".to_string()  // Valid function pointer placeholder
+                } else {
+                    "fn(...)".to_string()
+                }
+            }
+            Type::QualifiedPath { .. } => {
+                if for_syntax {
+                    "()".to_string()  // Valid placeholder
+                } else {
+                    "<qualified path>".to_string()
+                }
+            }
+            _ => {
+                if for_syntax {
+                    "()".to_string()  // Valid placeholder
+                } else {
+                    "<type>".to_string()
+                }
+            }
         }
     }
 
@@ -359,5 +430,13 @@ impl DocIndex {
         } else {
             "<unnamed>".to_string()
         }
+    }
+
+    pub fn get_item_path(&self, item: &Item) -> String {
+        self.get_item_path_from_index(item)
+    }
+
+    pub fn krate(&self) -> &Crate {
+        &self.krate
     }
 }

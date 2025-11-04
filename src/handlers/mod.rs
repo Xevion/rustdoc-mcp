@@ -1,6 +1,6 @@
 pub mod legacy;
 
-mod get_type_definition;
+pub mod get_type_definition;
 mod list_methods;
 mod list_trait_impls;
 mod get_function_signature;

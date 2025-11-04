@@ -57,6 +57,30 @@ Show generic constraints for a type or function.
 - Multi-crate support: Search across dependencies in parallel
 - Result limits: Default to reasonable counts, allow override
 
+## Standard Library Documentation
+
+The Rust standard library documentation is available as JSON through a special rustup component:
+
+**Installation:**
+```bash
+rustup component add --toolchain nightly rust-docs-json
+```
+
+**Location:**
+The JSON files are located in the sysroot under `share/doc/rust/json/`:
+```bash
+cd $(rustup run nightly rustc --print sysroot)
+# JSON files at: share/doc/rust/json/
+```
+
+**Available JSON files:**
+- `std.json` (9.9 MB) - Main standard library
+- `core.json` (48 MB) - Core library (no_std)
+- `alloc.json` (4.2 MB) - Allocation and collections
+- `proc_macro.json` (648 KB) - Procedural macros
+- `test.json` (639 KB) - Test framework
+- `std_detect.json` (115 KB) - Platform detection
+
 ## Out of Scope (For Now)
 
 **Potentially useful but complex:**

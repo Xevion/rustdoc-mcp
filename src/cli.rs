@@ -31,4 +31,11 @@ pub enum Commands {
         #[arg(short = 'n', long, default_value = "5")]
         limit: usize,
     },
+    TypeDef {
+        type_name: String,
+        #[arg(short = 'c', long = "crate")]
+        crate_override: Option<String>,
+        #[arg(short = 'n', long, default_value = "5")]
+        limit: usize,
+    },
 }
