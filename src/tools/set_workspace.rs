@@ -45,7 +45,7 @@ pub fn execute_set_workspace(path: String) -> Result<(PathBuf, WorkspaceMetadata
         .collect();
 
     // Get dependencies with versions
-    let dependencies = get_resolved_versions()
+    let dependencies = get_resolved_versions(&canonical_path)
         .map(|deps| deps.into_iter().collect())
         .unwrap_or_default();
 

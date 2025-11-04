@@ -1,6 +1,7 @@
 use cargo_doc_mcp::context::ServerContext;
-use cargo_doc_mcp::tools::set_workspace::{execute_set_workspace, format_response};
+use cargo_doc_mcp::handlers::inspect_item::{execute_inspect_item, InspectItemRequest};
 use cargo_doc_mcp::tools::list_crates::{execute_list_crates, ListCratesRequest};
+use cargo_doc_mcp::tools::set_workspace::{execute_set_workspace, format_response};
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -86,6 +87,26 @@ impl DocServer {
 
         // Execute the logic
         execute_list_crates(&state, request).map_err(|e| format!("cargo-doc-mcp: {}", e))
+    }
+
+    #[tool(
+        description = "Inspect a Rust item (struct, enum, function, trait, module, etc.) from the workspace or dependencies. Supports path queries like 'Vec', 'std::vec::Vec', or 'HashMap'. Returns formatted documentation with configurable verbosity levels.",
+        input_schema = cargo_doc_mcp::schema::inline_schema_for_type::<InspectItemRequest>()
+    )]
+    fn inspect_item(
+        &self,
+        Parameters(request): Parameters<InspectItemRequest>,
+    ) -> Result<String, String> {
+        // Get context
+        let state = self.state
+            .lock()
+            .unwrap_or_else(|_poisoned| {
+                tracing::error!("cargo-doc-mcp: Context state corrupted, aborting");
+                std::process::abort();
+            });
+
+        // Execute the logic
+        execute_inspect_item(&state, request).map_err(|e| format!("cargo-doc-mcp: {}", e))
     }
 }
 

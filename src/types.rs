@@ -1,4 +1,6 @@
+use rmcp::schemars;
 use rustdoc_types::{Id, ItemEnum};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -18,7 +20,8 @@ pub struct TraitImplInfo {
     pub methods: Vec<Id>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum ItemKind {
     Module,
     Struct,

@@ -58,8 +58,9 @@ impl fmt::time::FormatTime for UptimeTimer {
     }
 }
 
-pub fn get_resolved_versions() -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+pub fn get_resolved_versions(workspace_root: &Path) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
     let metadata = MetadataCommand::new()
+        .current_dir(workspace_root)
         .exec()
         .map_err(|e| format!("Failed to run cargo metadata: {}", e))?;
 
@@ -87,16 +88,16 @@ pub fn get_resolved_versions() -> Result<HashMap<String, String>, Box<dyn std::e
     Ok(direct_deps)
 }
 
-pub fn get_docs(crate_name: &str, version: Option<&str>) -> Result<DocIndex, Box<dyn std::error::Error>> {
+pub fn get_docs(crate_name: &str, version: Option<&str>, workspace_root: &Path) -> Result<DocIndex, Box<dyn std::error::Error>> {
     let normalized_name = crate_name.replace('-', "_");
-    let doc_path = format!("target/doc/{}.json", normalized_name);
+    let doc_path = workspace_root.join("target").join("doc").join(format!("{}.json", normalized_name));
 
-    if !Path::new(&doc_path).exists() {
-        debug!("Documentation not found at {}", doc_path);
+    if !doc_path.exists() {
+        debug!("Documentation not found at {}", doc_path.display());
         info!("Generating documentation for {}{}", crate_name,
             version.map(|v| format!("@{}", v)).unwrap_or_default());
 
-        generate_docs(crate_name, version)?;
+        generate_docs(crate_name, version, workspace_root)?;
 
         info!("Documentation generated");
     }
@@ -104,7 +105,7 @@ pub fn get_docs(crate_name: &str, version: Option<&str>) -> Result<DocIndex, Box
     DocIndex::load(&doc_path)
 }
 
-pub fn generate_docs(crate_name: &str, version: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn generate_docs(crate_name: &str, version: Option<&str>, workspace_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     // Validate inputs to prevent command injection
     validate_crate_name(crate_name)?;
     if let Some(ver) = version {
@@ -118,6 +119,7 @@ pub fn generate_docs(crate_name: &str, version: Option<&str>) -> Result<(), Box<
     };
 
     let output = Command::new("cargo")
+        .current_dir(workspace_root)
         .arg("+nightly")
         .arg("rustdoc")
         .arg("--package")

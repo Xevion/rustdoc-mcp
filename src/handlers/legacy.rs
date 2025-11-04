@@ -353,7 +353,16 @@ pub fn parse_crate_list(input: &str) -> Vec<String> {
 pub async fn load_multiple_crates(
     crate_names: &[String],
 ) -> (Vec<(String, DocIndex)>, Vec<String>) {
-    let version_map = match get_resolved_versions() {
+    // Find workspace root for cargo operations
+    let workspace_root = match find_cargo_toml() {
+        Some(cargo_toml) => cargo_toml.parent().unwrap().to_path_buf(),
+        None => {
+            warn!("Could not find Cargo.toml, using current directory");
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        }
+    };
+
+    let version_map = match get_resolved_versions(&workspace_root) {
         Ok(map) => map,
         Err(e) => {
             warn!(
@@ -369,6 +378,7 @@ pub async fn load_multiple_crates(
     for crate_name in crate_names {
         let crate_name = crate_name.clone();
         let version = version_map.get(&crate_name).cloned();
+        let workspace_root = workspace_root.clone();
 
         let task = tokio::task::spawn_blocking(move || {
             let target = if let Some(ref v) = version {
@@ -380,7 +390,7 @@ pub async fn load_multiple_crates(
             let span = info_span!("get_docs", target = %target);
             let _enter = span.enter();
 
-            match get_docs(&crate_name, version.as_deref()) {
+            match get_docs(&crate_name, version.as_deref(), &workspace_root) {
                 Ok(doc_index) => Ok((crate_name, doc_index)),
                 Err(e) => {
                     warn!("Failed to load crate '{}': {}", crate_name, e);
