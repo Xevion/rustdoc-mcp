@@ -123,7 +123,7 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
                     for (idx, path) in paths.iter().enumerate() {
                         if idx == 0 {
-                            println!("  ✓ {} (recommended)", path);
+                            println!("  {} (recommended)", path);
                         } else {
                             println!("    {}", path);
                         }

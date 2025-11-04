@@ -2,98 +2,247 @@
 
 ## Purpose
 
-A CLI tool (future MCP server) that provides structured access to Rust documentation for AI assistants. Queries rustdoc JSON to answer concrete questions about types, functions, traits, and modules.
+An MCP server that provides intelligent access to Rust documentation for AI assistants. Enables natural language queries about types, functions, traits, and modules by efficiently querying rustdoc JSON data.
+
+**Design for AI assistants first**: Unified tools with flexible parameters, fuzzy matching, session context, and smart suggestions.
 
 ## Design Principles
 
-- **Accuracy**: Only show public, documented items
-- **Completeness**: Don't miss methods, impls, or paths
-- **Fuzzy matching**: AI doesn't need exact names
-- **Speed**: Parallel loading, efficient indexing
-- **Structured output**: Parseable, factual data
+- **AI-First UX**: Unified tools with parameters instead of many specialized tools
+- **Session Context**: Persistent working directory across requests
+- **Lazy & Smart**: Only load crates when needed, cache intelligently
+- **Path Resolution**: Handle `crate::module::Type` and cross-crate references
+- **Fuzzy Everything**: AI doesn't need exact names, provide helpful suggestions
+- **Fast Search**: Persistent TF-IDF indexing with smart tokenization
+- **Production Ready**: Excellent error messages, comprehensive documentation
+
+## Architecture
+
+### Three-Tier Caching Strategy
+
+```
+Server Context (persistent across requests)
+  ↓ working directory, project metadata
+Request Scope (per-MCP-call)
+  ↓ loaded crates cache, auto-cleanup on drop
+Lazy Loading
+  ↓ only load crates when accessed
+```
+
+**Why this matters**: Loading all dependencies eagerly is slow and memory-intensive. This architecture loads crates on-demand and cleans them up after each request.
+
+### DocRef Pattern
+
+Zero-copy references that bundle:
+
+- Item reference (`&Item`)
+- Crate docs reference (`&RustdocData`)
+- Request reference (for cross-crate lookups)
+- Custom name override (for `use` statements)
+
+Implements `Copy` for efficiency. Enables clean traversal APIs.
+
+### Path Resolution System
+
+Handles:
+
+- **Module paths**: `crate::module::submodule::Type`
+- **Cross-crate**: `serde_json::Value`, `std::vec::Vec`
+- **Use statements**: Follows `pub use` declarations
+- **Glob imports**: Resolves `use module::*`
+- **Fuzzy matching**: Suggests corrections on typos
+
+### Iterator Abstractions
+
+Custom iterators hide complexity:
+
+- `methods()` - all methods (inherent + trait impls)
+- `traits()` - all trait implementations
+- `child_items()` - recursive module/enum/struct traversal
+- Automatic `use` statement resolution
+- Handles re-exports transparently
 
 ## Core Tools
 
-### 1. get_type_definition
-Show the structure of types (structs, enums, unions).
+### 1. set_workspace
 
-**Input**: Type name (fuzzy)
-**Output**: Fields/variants with types, visibility, documentation
+Establish session context for subsequent queries.
 
-### 2. list_methods
-List all methods available on a type (inherent + trait methods).
+**Input**: Path to Rust project root
+**Output**: Confirmation, discovered workspace info
 
-**Input**: Type name (fuzzy)
-**Output**: Method signatures grouped by source (inherent, trait impls)
+**Enables**: Using "crate" to refer to project crate, auto-discovery of dependencies
 
-### 3. list_trait_impls
-What traits does this type implement?
+### 2. inspect_item
 
-**Input**: Type name (fuzzy)
-**Output**: List of implemented traits (local crate + visible from deps)
+Unified tool for inspecting types, modules, functions, and traits.
 
-### 4. get_function_signature
-Get detailed signature for functions.
+**Input**:
 
-**Input**: Function name (fuzzy)
-**Output**: Full signature with generics, bounds, parameters, return type, docs
+- `name` (string): Path like "crate::MyStruct", "serde_json::Value", or "std::vec::Vec"
+- `recursive` (bool, optional): Recursively list module contents
+- `filter` (array, optional): Filter by kind: `["struct", "enum", "function", "trait", ...]`
+- `include_source` (bool, optional): Include source code snippets
+- `verbosity` (enum, optional): "minimal" | "brief" | "full"
 
-### 5. list_module_contents
-List everything exported from a module.
+**Output**: Context-aware based on item type:
 
-**Input**: Module path (fuzzy)
-**Output**: All public items grouped by kind (types, functions, traits, constants, etc.)
+- **Type (struct/enum)**: Fields/variants, visibility, documentation, methods
+- **Function**: Signature with generics, parameters, return type, docs
+- **Module**: List of public items (filtered if requested)
+- **Trait**: Required methods, associated types
 
-### 6. get_generic_bounds
-Show generic constraints for a type or function.
+**Examples**:
 
-**Input**: Item name (fuzzy)
-**Output**: Type parameters, trait bounds, where clauses
+```
+inspect_item("crate::MyStruct", include_source: true)
+inspect_item("crate::module", recursive: true, filter: ["struct", "enum"])
+inspect_item("std::vec::Vec", verbosity: "full")
+```
 
-## Implementation Notes
+**Why unified?**: AI assistants are better at selecting parameters than choosing between 6 different tools. One flexible tool reduces cognitive load.
 
-- Fuzzy search: case-insensitive, substring matching, relevance scoring
-- Privacy filtering: Only show `pub` items, no internal paths
-- Multi-crate support: Search across dependencies in parallel
-- Result limits: Default to reasonable counts, allow override
+### 3. list_crates
 
-## Standard Library Documentation
+Discover crates in the workspace and dependencies.
 
-The Rust standard library documentation is available as JSON through a special rustup component:
+**Input**:
+
+- `workspace_member` (string, optional): Scope to specific workspace member
+
+**Output**: List of available crate names with versions
+
+**Use case**: Help AI discover what crates are available before querying them
+
+### 4. search_docs
+
+Full-text search with relevance ranking across names and documentation.
+
+**Input**:
+
+- `crate_name` (string): Crate to search in (use "crate" for project crate)
+- `query` (string): Search terms (multi-term queries combine scores)
+- `limit` (int, optional): Max results (default: 10)
+
+**Output**: Ranked results with paths, types, and documentation snippets
+
+**Features**:
+
+- Persistent TF-IDF index (cached on disk, invalidated on crate changes)
+- Smart tokenization: handles `CamelCase`, `snake_case`, `kebab-case`
+- Relevance cutoff: Only shows meaningful results
+- Searches both item names and documentation
+
+## Key Implementation Details
+
+### Fuzzy Matching
+
+- **Algorithm**: Jaro-Winkler distance (weights prefix matches)
+- **Threshold**: 0.8 minimum for suggestions
+- **Top-N**: Show up to 5 suggestions on failed lookups
+- **Crate name normalization**: `foo-bar` ↔ `foo_bar`
+
+### Search Indexing
+
+```rust
+// Smart tokenization examples:
+"CamelCase" → ["Camel", "Case", "CamelCase"]
+"snake_case" → ["snake", "case", "snake_case"]
+"kebab-case" → ["kebab", "case", "kebab-case"]
+"iterators" → ["iterator", "iterators"]  // plural handling
+
+// TF-IDF scoring:
+- Term frequency × Inverse document frequency
+- Multi-term queries: additive scoring
+- Name matches: 2x weight vs documentation
+```
+
+**Persistence**: Index stored as bincode, includes mtime for invalidation
+
+### Workspace Discovery
+
+- Uses `cargo_metadata` to find all dependencies
+- Discovers workspace members automatically
+- Loads standard library from nightly rustup component
+- Parallel loading where beneficial
+
+### Use Statement Resolution
+
+Transparently handles:
+
+```rust
+pub use module::Type;           // Simple re-export
+pub use module::*;              // Glob import (expands automatically)
+pub use external_crate::Type;   // Cross-crate re-export
+```
+
+## Standard Library Support
+
+The Rust standard library documentation is available as JSON through a rustup component:
 
 **Installation:**
+
 ```bash
 rustup component add --toolchain nightly rust-docs-json
 ```
 
 **Location:**
-The JSON files are located in the sysroot under `share/doc/rust/json/`:
+
 ```bash
-cd $(rustup run nightly rustc --print sysroot)
-# JSON files at: share/doc/rust/json/
+$(rustup run nightly rustc --print sysroot)/share/doc/rust/json/
 ```
 
-**Available JSON files:**
-- `std.json` (9.9 MB) - Main standard library
-- `core.json` (48 MB) - Core library (no_std)
-- `alloc.json` (4.2 MB) - Allocation and collections
-- `proc_macro.json` (648 KB) - Procedural macros
-- `test.json` (639 KB) - Test framework
-- `std_detect.json` (115 KB) - Platform detection
+**Available crates**: `std`, `core`, `alloc`, `proc_macro`, `test`
 
-## Out of Scope (For Now)
+Auto-discovered when available, gracefully skipped if missing.
 
-**Potentially useful but complex:**
+## Error Handling & UX
 
-- **search_by_signature**: Find functions by return type or parameter types
-  (Requires type matching/unification)
+### Excellent Error Messages
 
-- **find_constructors**: Detect common construction patterns (`new()`, `default()`, builders)
-  (Heuristic-based, may be useful if kept simple)
+- **Path not found**: Show fuzzy suggestions with types
+- **Ambiguous match**: Show all options with disambiguation hints
+- **Crate not loaded**: Suggest running in project directory
+- **Invalid filter**: Show valid filter options
 
-- **feature_mapping**: Show which cargo features gate specific items
-  (rustdoc JSON doesn't preserve `#[cfg]` reliably)
+### Verbosity Levels
 
-**Not feasible:**
+- **Minimal**: Structure only (types, signatures, no docs)
+- **Brief** (default): Truncated docs with "..." hint for more
+- **Full**: Complete documentation without truncation
 
-- **macro_signatures**: rustdoc JSON doesn't capture macro syntax patterns
+Helps AI balance context window vs information needs.
+
+## Future Enhancements
+
+### High Priority
+
+- **CLI mode**: Interactive REPL for human exploration
+- **Trait method lookup**: "What traits provide method X?"
+- **Type constructor analysis**: Find `new()`, `default()`, builders
+- **Signature search**: Find functions by return type
+
+### Medium Priority
+
+- **Dependency graph**: Visualize crate relationships
+- **Doc coverage**: Analyze missing documentation
+- **Link validation**: Check doc links are valid
+- **Custom output formats**: JSON, Markdown, HTML
+
+### Research Needed
+
+- **Feature mapping**: Show which Cargo features gate items (rustdoc JSON limitations)
+- **Macro documentation**: Macro syntax patterns (not in rustdoc JSON)
+- **Type unification**: Advanced signature matching (complex)
+
+## Why This Project?
+
+**Compared to existing solutions:**
+
+1. **Better Documentation**: Comprehensive examples, clear architecture explanations
+2. **AI-First Design**: Unified tools optimized for LLM decision-making
+3. **Reliability Focus**: Excellent error messages, graceful degradation
+4. **Performance**: Smart caching prevents memory bloat on large projects
+5. **Actually Works**: Tested on real-world projects, handles edge cases
+
+**Core Value**: Make Rust documentation accessible to AI assistants without requiring them to understand rustdoc JSON complexity or cargo/rustup internals.

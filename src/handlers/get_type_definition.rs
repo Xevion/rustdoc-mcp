@@ -68,17 +68,13 @@ pub async fn handle(
     let mut definitions = Vec::new();
 
     for result in all_results.iter().take(limit) {
-        if let Some(source_crate) = &result.source_crate {
-            if let Some((_, doc)) = loaded_crates.iter().find(|(name, _)| name == source_crate) {
-                if let Some(id) = &result.id {
-                    if let Some(item) = doc.get_item(id) {
-                        if let Some(def) = extract_type_definition(item, doc, source_crate.clone()) {
+        if let Some(source_crate) = &result.source_crate
+            && let Some((_, doc)) = loaded_crates.iter().find(|(name, _)| name == source_crate)
+                && let Some(id) = &result.id
+                    && let Some(item) = doc.get_item(id)
+                        && let Some(def) = extract_type_definition(item, doc, source_crate.clone()) {
                             definitions.push(def);
                         }
-                    }
-                }
-            }
-        }
     }
 
     Ok((definitions, loaded_crates))

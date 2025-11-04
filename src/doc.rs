@@ -329,12 +329,10 @@ impl DocIndex {
                     } else {
                         name
                     }
+                } else if for_syntax {
+                    "()".to_string()  // Valid unit type placeholder
                 } else {
-                    if for_syntax {
-                        "()".to_string()  // Valid unit type placeholder
-                    } else {
-                        "<type>".to_string()
-                    }
+                    "<type>".to_string()
                 }
             }
             Type::Generic(name) => name.clone(),
