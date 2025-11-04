@@ -14,6 +14,9 @@ pub struct ServerContext {
 
     /// Cached workspace metadata from cargo
     workspace_metadata: Option<WorkspaceMetadata>,
+
+    /// Path to Cargo.lock file (for dependency fingerprinting)
+    cargo_lock_path: Option<PathBuf>,
 }
 
 /// Metadata about a Rust workspace discovered via cargo metadata.
@@ -53,11 +56,24 @@ impl ServerContext {
             return Err(anyhow!("Path is not a directory: {}", path.display()));
         }
 
+        // Look for Cargo.lock in the directory
+        let lock_path = path.join("Cargo.lock");
+        self.cargo_lock_path = if lock_path.exists() {
+            Some(lock_path)
+        } else {
+            None
+        };
+
         // Clear cached workspace metadata when directory changes
         self.workspace_metadata = None;
         self.working_directory = Some(path);
 
         Ok(())
+    }
+
+    /// Get the Cargo.lock path if available
+    pub fn cargo_lock_path(&self) -> Option<&PathBuf> {
+        self.cargo_lock_path.as_ref()
     }
 
     /// Get cached workspace metadata, if available

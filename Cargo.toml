@@ -10,7 +10,7 @@ rmcp-macros = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-toml = "0.9"
+toml = { version = "0.9", features = ["parse"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -20,3 +20,8 @@ syn = { version = "2", features = ["full", "parsing"] }
 shellexpand = "3.1"
 anyhow = "1.0"
 cargo_metadata = "0.23"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+assert2 = "0.3.16"
+rstest = "0.26.1"

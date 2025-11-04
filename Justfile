@@ -13,3 +13,7 @@ check:
 # Run the MCP server
 run:
     cargo run
+
+# Run the tests
+test:
+    cargo nextest run --no-fail-fast

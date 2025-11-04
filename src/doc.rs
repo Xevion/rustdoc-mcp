@@ -61,10 +61,33 @@ impl DocIndex {
         query: &str,
         filter_kind: Option<ItemKind>,
     ) -> Vec<SearchResult> {
+        self.search_with_filter_ex(query, filter_kind, false)
+    }
+
+    pub fn search_with_filter_ex(
+        &self,
+        query: &str,
+        filter_kind: Option<ItemKind>,
+        use_path_matching: bool,
+    ) -> Vec<SearchResult> {
         let query_lower = query.to_lowercase();
         let mut results = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+
+        // Check if query contains path components
+        let is_path_query = use_path_matching || query.contains("::");
+        let query_components: Vec<&str> = if is_path_query {
+            query_lower.split("::").collect()
+        } else {
+            vec![]
+        };
 
         for item in self.index.values() {
+            // Skip impl blocks - they're not directly queryable items
+            if matches!(item.inner, ItemEnum::Impl(_)) {
+                continue;
+            }
+
             if let Some(kind_filter) = filter_kind
                 && !matches_kind(&item.inner, kind_filter) {
                     continue;
@@ -72,7 +95,26 @@ impl DocIndex {
 
             if let Some(name) = &item.name {
                 let name_lower = name.to_lowercase();
-                if let Some(relevance) = calculate_relevance(&name_lower, &query_lower) {
+
+                // For path queries, check if this item matches
+                let relevance = if is_path_query {
+                    // Get the full path and check if it ends with query components
+                    if let Some(summary) = self.krate.paths.get(&item.id) {
+                        calculate_path_relevance(&summary.path, &query_components)
+                    } else {
+                        None
+                    }
+                } else {
+                    // Simple name matching
+                    calculate_relevance(&name_lower, &query_lower)
+                };
+
+                if let Some(relevance) = relevance {
+                    // Skip if we've already seen this item
+                    if !seen_ids.insert(item.id) {
+                        continue;
+                    }
+
                     let path = self.get_item_path_from_index(item);
                     results.push(SearchResult {
                         name: name.clone(),
@@ -89,6 +131,11 @@ impl DocIndex {
         }
 
         for (id, summary) in &self.krate.paths {
+            // Skip impl blocks - they're not directly queryable items
+            if matches!(summary.kind, rustdoc_types::ItemKind::Impl) {
+                continue;
+            }
+
             if let Some(kind_filter) = filter_kind {
                 let matches = match (kind_filter, &summary.kind) {
                     (ItemKind::Module, rustdoc_types::ItemKind::Module) => true,
@@ -107,8 +154,21 @@ impl DocIndex {
             }
 
             if let Some(last_segment) = summary.path.last() {
-                let name_lower = last_segment.to_lowercase();
-                if let Some(relevance) = calculate_relevance(&name_lower, &query_lower) {
+                // For path queries, check if the path ends with query components
+                let relevance = if is_path_query {
+                    calculate_path_relevance(&summary.path, &query_components)
+                } else {
+                    // Simple name matching
+                    let name_lower = last_segment.to_lowercase();
+                    calculate_relevance(&name_lower, &query_lower)
+                };
+
+                if let Some(relevance) = relevance {
+                    // Skip if we've already seen this item
+                    if !seen_ids.insert(*id) {
+                        continue;
+                    }
+
                     let crate_name = self.external_crates.get(&summary.crate_id).cloned();
                     let path = summary.path.join("::");
                     results.push(SearchResult {

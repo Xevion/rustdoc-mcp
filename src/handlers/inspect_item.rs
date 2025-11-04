@@ -59,49 +59,67 @@ pub fn execute_inspect_item(
             .map(|(name, _)| name.clone()),
     );
 
-    // Resolve crate name from path
-    let crate_name = if let Some(resolved) = resolve_crate_from_path(&mut path, &known_crates) {
-        resolved
-    } else if path.path_components.len() == 1 {
-        // Single component query without crate - search in workspace members first
-        if let Some(member) = workspace_meta.members.first() {
-            member.clone()
-        } else {
-            return Err("No workspace members found. Use set_workspace first.".to_string());
-        }
+    // Track if this was originally a path query (before crate resolution)
+    let is_path_query = path.path_components.len() > 1 || request.query.contains("::");
+
+    // Check if the query specifies a crate (e.g., "serde::Serialize")
+    let specified_crate = resolve_crate_from_path(&mut path, &known_crates);
+    let search_query = path.full_path();
+
+    // Determine which crates to search
+    let crates_to_search: Vec<String> = if let Some(crate_name) = specified_crate {
+        // User specified a crate - only search that one
+        vec![crate_name]
     } else {
-        // Multi-component path without resolved crate - try first workspace member
-        if let Some(member) = workspace_meta.members.first() {
-            member.clone()
-        } else {
-            return Err("No workspace members found. Use set_workspace first.".to_string());
-        }
+        // No crate specified - search workspace members + all direct dependencies
+        let mut crates = workspace_meta.members.clone();
+        crates.extend(workspace_meta.dependencies.iter().map(|(name, _)| name.clone()));
+        crates
     };
 
-    // Get version if it's a dependency
-    let version = workspace_meta
-        .dependencies
-        .iter()
-        .find(|(name, _)| name == &crate_name)
-        .map(|(_, ver)| ver.as_str());
+    // Search across all target crates
+    let mut all_results = Vec::new();
+    let cargo_lock_path = context.cargo_lock_path().map(|p| p.as_path());
 
-    // Load documentation
-    let doc = get_docs(&crate_name, version, workspace_root).map_err(|e| {
-        format!(
-            "Failed to load documentation for '{}': {}",
-            crate_name, e
-        )
-    })?;
+    for crate_name in &crates_to_search {
+        // Determine if this is a workspace member
+        let is_workspace_member = workspace_meta.members.contains(&crate_name.to_string());
 
-    // Search for the item
-    let search_query = path.full_path();
-    let results = doc.search_with_filter(&search_query, request.kind);
+        // Get version if it's a dependency
+        let version = workspace_meta
+            .dependencies
+            .iter()
+            .find(|(name, _)| name == crate_name)
+            .map(|(_, ver)| ver.as_str());
 
-    if results.is_empty() {
+        // Load documentation for this crate
+        let doc = match get_docs(crate_name, version, workspace_root, is_workspace_member, cargo_lock_path) {
+            Ok(d) => d,
+            Err(_) => continue, // Skip crates we can't load docs for
+        };
+
+        // Search within this crate
+        let mut results = doc.search_with_filter_ex(&search_query, request.kind, is_path_query);
+
+        // Mark each result with the source crate
+        for result in &mut results {
+            result.source_crate = Some(crate_name.clone());
+        }
+
+        all_results.extend(results);
+    }
+
+    // Sort results by relevance
+    all_results.sort_by(|a, b| {
+        b.relevance
+            .cmp(&a.relevance)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    if all_results.is_empty() {
         return Err(format!(
-            "No items found matching '{}' in crate '{}'{}",
+            "No items found matching '{}'{}",
             search_query,
-            crate_name,
             if let Some(k) = request.kind {
                 format!(" with kind '{:?}'", k)
             } else {
@@ -111,17 +129,51 @@ pub fn execute_inspect_item(
     }
 
     // Handle multiple matches - error with suggestions
-    if results.len() > 1 {
-        return Err(format_disambiguation_error(&results, &search_query, &crate_name));
+    if all_results.len() > 1 {
+        return Err(format_disambiguation_error(
+            &all_results,
+            &search_query,
+            crates_to_search.first().unwrap(),
+        ));
     }
 
-    // Single match found - format the output
-    let result = &results[0];
-    let item = doc
-        .get_item(result.id.as_ref().unwrap())
-        .ok_or_else(|| "Item not found in documentation index".to_string())?;
+    // Single match found - load the specific crate's docs and format output
+    let result = &all_results[0];
 
-    format_item_output(item, &doc, request.verbosity, &crate_name)
+    // Use the actual crate where the item is defined (may be different from search crate)
+    let item_crate = result.crate_name.as_ref()
+        .or(result.source_crate.as_ref())
+        .ok_or_else(|| "No crate information for matched item".to_string())?;
+
+    let is_workspace_member = workspace_meta.members.contains(&item_crate.to_string());
+
+    let version = workspace_meta
+        .dependencies
+        .iter()
+        .find(|(name, _)| name == item_crate)
+        .map(|(_, ver)| ver.as_str());
+
+    let doc = get_docs(item_crate, version, workspace_root, is_workspace_member, cargo_lock_path).map_err(|e| {
+        format!(
+            "Failed to load documentation for '{}': {}",
+            item_crate, e
+        )
+    })?;
+
+    let item_id = result.id.as_ref().ok_or_else(|| {
+        format!(
+            "Item '{}' ({}) at '{}' has no ID in search results",
+            result.name, result.kind, result.path
+        )
+    })?;
+    let item = doc.get_item(item_id).ok_or_else(|| {
+        format!(
+            "Item '{}' ({}) found at '{}' but documentation not loaded",
+            result.name, result.kind, result.path
+        )
+    })?;
+
+    format_item_output(item, &doc, request.verbosity, item_crate)
 }
 
 /// Format a disambiguation error when multiple items match
@@ -131,22 +183,34 @@ fn format_disambiguation_error(
     crate_name: &str,
 ) -> String {
     let mut error = format!(
-        "Multiple items found matching '{}' in '{}'. Please be more specific:\n\n",
-        query, crate_name
+        "Multiple items found matching '{}'. Please be more specific:\n\n",
+        query
     );
 
     for (i, result) in results.iter().enumerate().take(10) {
-        let _ = writeln!(
-            &mut error,
-            "{}. {} [{}] - {}",
-            i + 1,
-            result.path,
-            result.kind,
-            result.docs.as_deref().unwrap_or("No documentation")
-                .lines()
-                .next()
-                .unwrap_or("")
-        );
+        // Show crate name prefix in the path
+        let full_path = if let Some(src_crate) = &result.source_crate {
+            format!("{}::{}", src_crate, result.path)
+        } else {
+            format!("{}::{}", crate_name, result.path)
+        };
+
+        let _ = write!(&mut error, "{}. {} [{}]", i + 1, full_path, result.kind);
+
+        // Only show docs if they exist and are non-empty
+        if let Some(docs) = &result.docs {
+            let docs_trimmed = docs.trim();
+            if !docs_trimmed.is_empty() {
+                if let Some(first_line) = docs_trimmed.lines().next() {
+                    let first_line_trimmed = first_line.trim();
+                    if !first_line_trimmed.is_empty() {
+                        let _ = write!(&mut error, " - {}", first_line_trimmed);
+                    }
+                }
+            }
+        }
+
+        let _ = writeln!(&mut error);
     }
 
     if results.len() > 10 {

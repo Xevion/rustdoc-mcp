@@ -88,18 +88,66 @@ pub fn get_resolved_versions(workspace_root: &Path) -> Result<HashMap<String, St
     Ok(direct_deps)
 }
 
-pub fn get_docs(crate_name: &str, version: Option<&str>, workspace_root: &Path) -> Result<DocIndex, Box<dyn std::error::Error>> {
+pub fn get_docs(
+    crate_name: &str,
+    version: Option<&str>,
+    workspace_root: &Path,
+    is_workspace_member: bool,
+    cargo_lock_path: Option<&Path>,
+) -> Result<DocIndex, Box<dyn std::error::Error>> {
+    use crate::fingerprint::{compute_dependency_fingerprint, compute_workspace_fingerprint, load_fingerprint, save_fingerprint};
+    use crate::lockfile::parse_cargo_lock;
+
     let normalized_name = crate_name.replace('-', "_");
     let doc_path = workspace_root.join("target").join("doc").join(format!("{}.json", normalized_name));
+    let fingerprint_path = workspace_root
+        .join("target")
+        .join("doc")
+        .join(".fingerprints")
+        .join(format!("{}.fingerprint.json", normalized_name));
 
-    if !doc_path.exists() {
-        debug!("Documentation not found at {}", doc_path.display());
-        info!("Generating documentation for {}{}", crate_name,
-            version.map(|v| format!("@{}", v)).unwrap_or_default());
+    // Compute current fingerprint
+    let current_fingerprint = if is_workspace_member {
+        compute_workspace_fingerprint(crate_name, workspace_root)?
+    } else {
+        // For dependencies, get checksum from Cargo.lock
+        if let Some(lock_path) = cargo_lock_path {
+            let packages = parse_cargo_lock(lock_path)?;
+            if let Some(pkg) = packages.get(crate_name) {
+                let checksum = pkg.checksum.as_deref().unwrap_or("unknown");
+                compute_dependency_fingerprint(crate_name, &pkg.version, checksum)?
+            } else {
+                // Dependency not in Cargo.lock, treat as workspace member
+                compute_workspace_fingerprint(crate_name, workspace_root)?
+            }
+        } else {
+            // No Cargo.lock, treat as workspace member
+            compute_workspace_fingerprint(crate_name, workspace_root)?
+        }
+    };
+
+    // Load saved fingerprint
+    let saved_fingerprint = load_fingerprint(&fingerprint_path);
+
+    // Determine if regeneration is needed
+    let needs_regen = !doc_path.exists()
+        || saved_fingerprint.is_none()
+        || saved_fingerprint.unwrap() != current_fingerprint;
+
+    if needs_regen {
+        debug!("Documentation needs regeneration for {}", crate_name);
+        info!(
+            "Generating documentation for {}{}",
+            crate_name,
+            version.map(|v| format!("@{}", v)).unwrap_or_default()
+        );
 
         generate_docs(crate_name, version, workspace_root)?;
+        save_fingerprint(&fingerprint_path, &current_fingerprint)?;
 
         info!("Documentation generated");
+    } else {
+        debug!("Using cached documentation for {}", crate_name);
     }
 
     DocIndex::load(&doc_path)

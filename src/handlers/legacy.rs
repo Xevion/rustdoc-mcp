@@ -390,7 +390,17 @@ pub async fn load_multiple_crates(
             let span = info_span!("get_docs", target = %target);
             let _enter = span.enter();
 
-            match get_docs(&crate_name, version.as_deref(), &workspace_root) {
+            // Legacy code: assume dependencies (not workspace members) for safety
+            // This will cause regeneration if wrong, but prevents stale docs
+            let is_workspace_member = false;
+            let cargo_lock_path = workspace_root.join("Cargo.lock");
+            let cargo_lock = if cargo_lock_path.exists() {
+                Some(cargo_lock_path.as_path())
+            } else {
+                None
+            };
+
+            match get_docs(&crate_name, version.as_deref(), &workspace_root, is_workspace_member, cargo_lock) {
                 Ok(doc_index) => Ok((crate_name, doc_index)),
                 Err(e) => {
                     warn!("Failed to load crate '{}': {}", crate_name, e);

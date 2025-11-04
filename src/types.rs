@@ -90,6 +90,46 @@ pub fn calculate_relevance(text: &str, query: &str) -> Option<u32> {
     }
 }
 
+/// Calculate relevance for path-aware queries.
+///
+/// Matches items where the path ends with the query components.
+/// For example, query ["de", "deserialize"] matches paths like:
+/// - ["serde_core", "de", "Deserialize"] (exact suffix match)
+/// - ["serde", "de", "Deserialize"] (exact suffix match)
+pub fn calculate_path_relevance(item_path: &[String], query_components: &[&str]) -> Option<u32> {
+    if query_components.is_empty() {
+        return None;
+    }
+
+    // Convert item path to lowercase for case-insensitive comparison
+    let item_path_lower: Vec<String> = item_path.iter().map(|s| s.to_lowercase()).collect();
+
+    // Check if the item path ends with the query components
+    if item_path_lower.len() < query_components.len() {
+        return None;
+    }
+
+    // Get the suffix of the item path that matches the query length
+    let suffix = &item_path_lower[item_path_lower.len() - query_components.len()..];
+
+    // Check if all components match
+    let exact_match = suffix
+        .iter()
+        .zip(query_components.iter())
+        .all(|(item_seg, query_seg)| item_seg == query_seg);
+
+    if exact_match {
+        // Prefer exact length matches over longer paths
+        if item_path_lower.len() == query_components.len() {
+            Some(100)
+        } else {
+            Some(90)
+        }
+    } else {
+        None
+    }
+}
+
 pub fn format_generic_param(param: &rustdoc_types::GenericParamDef) -> String {
     match &param.kind {
         rustdoc_types::GenericParamDefKind::Type { .. } => param.name.clone(),
