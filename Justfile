@@ -7,8 +7,9 @@ install:
 
 # Run type checking and linting
 check:
-    cargo check
-    cargo clippy
+    cargo check --workspace --all-targets
+    cargo clippy --workspace --all-targets
+    cargo machete --with-metadata
 
 # Run the MCP server
 run:

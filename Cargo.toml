@@ -1,27 +1,49 @@
 [package]
 name = "cargo-doc-mcp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+# Core
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process"] }
+rmcp = { version = "0.8", features = ["transport-io"] }
+
+# Rustdoc types and metadata
 rustdoc-types = "0.56"
-rmcp = { version = "0.8.4", features = ["transport-io"] }
-rmcp-macros = "0.8"
+cargo_metadata = "0.23"
+
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-clap = { version = "4.5", features = ["derive"] }
+postcard = { version = "1.1", features = ["use-std"] }
+
+# Caching and performance
+bumpalo = "3.19"
+
+# Search functionality
+rust-stemmers = "1.2"
+ahash = "0.8"
+rapidfuzz = "0.5"
+
+# Rust syntax processing
+syn = { version = "2", features = ["full", "parsing"] }
+prettyplease = "0.2"
 toml = { version = "0.9", features = ["parse"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# File system operations
+ignore = "0.4"
+
+# Tracing and error handling
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-prettyplease = "0.2"
-regex = "1.0"
-syn = { version = "2", features = ["full", "parsing"] }
-shellexpand = "3.1"
 anyhow = "1.0"
-cargo_metadata = "0.23"
-walkdir = "2.5.0"
+
+# Text processing
+regex = "1.0"
+rstest = "0.26.1"
+dirs = "6.0.0"
 
 [dev-dependencies]
 assert2 = "0.3.16"
 rstest = "0.26.1"
+tempfile = "3.23.0"

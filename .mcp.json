@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cargo-doc-mcp": {
+      "type": "stdio",
+      "command": "cargo-doc-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

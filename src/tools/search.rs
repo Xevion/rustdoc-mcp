@@ -1,0 +1,145 @@
+//! TF-IDF search handler for finding documentation items.
+
+use crate::{
+    search::{QueryContext, TermIndex},
+    server::ServerContext,
+};
+use rmcp::schemars;
+use serde::Deserialize;
+use std::{fmt::Write as _, sync::Arc};
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchRequest {
+    /// Search query term
+    pub query: String,
+    /// Crate to search within
+    pub crate_name: String,
+    /// Maximum number of results to return (default: 10)
+    #[serde(default = "default_limit")]
+    pub limit: Option<usize>,
+}
+
+fn default_limit() -> Option<usize> {
+    Some(10)
+}
+
+/// Execute the search operation using TF-IDF indexing.
+pub async fn handle_search(
+    context: &ServerContext,
+    request: SearchRequest,
+) -> Result<String, String> {
+    // Get workspace metadata
+    let workspace_ctx = context
+        .workspace_context()
+        .ok_or_else(|| "No workspace configured. Use set_workspace first.".to_string())?;
+
+    // Create QueryContext for this operation
+    let query_ctx = QueryContext::new(Arc::new(workspace_ctx.clone()));
+
+    // Load or build search index
+    let index = match TermIndex::load_or_build(&query_ctx, &request.crate_name) {
+        Ok(index) => index,
+        Err(mut suggestions) => {
+            // Format suggestions for crate name
+            let mut result = format!(
+                "Crate '{}' not found. Did you mean one of these?\n\n",
+                &request.crate_name
+            );
+            suggestions.sort_by(|a, b| b.score().total_cmp(&a.score()));
+            for suggestion in suggestions.into_iter().take(5).filter(|s| s.score() > 0.8) {
+                result
+                    .write_fmt(format_args!("• `{}`", suggestion.path()))
+                    .unwrap();
+
+                if let Some(item) = suggestion.item() {
+                    result
+                        .write_fmt(format_args!(" ({:?})\n", item.kind()))
+                        .unwrap();
+                } else {
+                    result.push_str(" (Crate)\n");
+                }
+            }
+            return Ok(result);
+        }
+    };
+
+    // Perform search
+    let limit = request.limit.unwrap_or(10);
+    let results = index.search(&request.query, limit);
+
+    if results.is_empty() {
+        let mut msg = format!(
+            "No results found for '{}' in crate '{}'.\n\n",
+            request.query, request.crate_name
+        );
+
+        // Provide helpful suggestions
+        msg.push_str("Search tips:\n");
+        msg.push_str("• Try a shorter or more general term\n");
+        msg.push_str("• Search for types like 'HashMap', 'Vec', 'String'\n");
+        msg.push_str("• Try function names like 'parse', 'read', 'write'\n");
+        msg.push_str("• Search uses stemming: 'parsing' matches 'parse'\n");
+
+        // Check if query looks like it might be too specific
+        if request.query.contains("::") {
+            msg.push_str("• Note: Search by term only, not full paths\n");
+        }
+
+        return Ok(msg);
+    }
+
+    // Format results with normalized scores
+    let mut output = format!(
+        "Search results for '{}' in '{}':\n\n",
+        request.query, request.crate_name
+    );
+
+    // Normalize scores to 0-100% scale
+    let max_score = results.first().map(|r| r.rank).unwrap_or(1.0);
+
+    for (idx, result) in results.iter().enumerate() {
+        let relevance = ((result.rank / max_score) * 100.0).round() as u8;
+
+        // Resolve the item from item_path
+        match query_ctx.get_item_from_id_path(&result.item.crate_name, &result.item.item_path) {
+            Some((item, path_segments)) => {
+                let path = path_segments.join("::");
+                output
+                    .write_fmt(format_args!(
+                        "{}. `{}` ({:?}) - relevance: {}%\n",
+                        idx + 1,
+                        path,
+                        item.kind(),
+                        relevance
+                    ))
+                    .unwrap();
+
+                // Add summary documentation if available
+                if let Some(docs) = item.comment() {
+                    let first_line = docs
+                        .lines()
+                        .find(|line| !line.trim().is_empty())
+                        .unwrap_or("");
+                    if !first_line.is_empty() {
+                        output
+                            .write_fmt(format_args!("   {}\n", first_line.trim()))
+                            .unwrap();
+                    }
+                }
+            }
+            None => {
+                output
+                    .write_fmt(format_args!(
+                        "{}. [Unable to resolve item] - relevance: {}%\n",
+                        idx + 1,
+                        relevance
+                    ))
+                    .unwrap();
+            }
+        };
+
+        output.push('\n');
+    }
+
+    Ok(output)
+}

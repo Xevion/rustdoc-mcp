@@ -1,16 +1,19 @@
-pub mod cargo;
-pub mod cli;
-pub mod context;
-pub mod doc;
-pub mod fingerprint;
+pub mod cache;
+pub mod error;
 pub mod format;
-pub mod handlers;
-pub mod lockfile;
-pub mod path;
-pub mod schema;
+pub mod item;
+pub mod search;
+pub mod server;
 pub mod tools;
-pub mod types;
+pub mod workspace;
 
-pub use context::{ServerContext, WorkspaceMetadata};
-pub use doc::DocIndex;
-pub use types::{ItemKind, SearchResult, TraitImplInfo};
+pub use cache::Hash;
+pub use error::LoadError;
+pub use format::DetailLevel;
+pub use item::{ItemRef, TraitImplInfo};
+pub use search::{
+    CrateIndex, DetailedSearchResult, ItemKind, PathSuggestion, QueryContext, TermIndex,
+    expand_tilde,
+};
+pub use server::{ItemServer, ServerContext, inline_schema_for_type};
+pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};

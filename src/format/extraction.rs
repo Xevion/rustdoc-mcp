@@ -1,10 +1,9 @@
-use crate::doc::DocIndex;
-use crate::handlers::legacy;
-use crate::types::ItemKind;
+use crate::format::TypeFormatter;
+use crate::search::CrateIndex;
 use rustdoc_types::{Generics, Id, Item, ItemEnum};
 
 #[derive(Debug, Clone)]
-pub struct TypeDefinition {
+pub struct TypeInfo {
     pub name: String,
     pub kind: String,
     pub path: String,
@@ -34,62 +33,22 @@ pub struct VariantInfo {
     pub struct_fields: Option<Vec<FieldInfo>>,
 }
 
-pub async fn handle(
-    query: &str,
-    crates: Option<Vec<String>>,
-    limit: Option<usize>,
-) -> Result<(Vec<TypeDefinition>, Vec<(String, DocIndex)>), Box<dyn std::error::Error>> {
-    let limit = limit.unwrap_or(5);
-
-    // Resolve and load crates
-    let crate_list = legacy::resolve_crates(crates.map(|c| c.join(",")))?;
-    let (loaded_crates, _) = legacy::load_multiple_crates(&crate_list).await;
-
-    if loaded_crates.is_empty() {
-        return Err("No crates could be loaded".into());
-    }
-
-    // Search for types (Struct, Enum, Union)
-    let struct_results = legacy::search_multiple_crates(&loaded_crates, query, Some(ItemKind::Struct));
-    let enum_results = legacy::search_multiple_crates(&loaded_crates, query, Some(ItemKind::Enum));
-
-    let mut all_results = Vec::new();
-    all_results.extend(struct_results);
-    all_results.extend(enum_results);
-
-    // Sort by relevance
-    all_results.sort_by(|a, b| {
-        b.relevance
-            .cmp(&a.relevance)
-            .then_with(|| a.name.cmp(&b.name))
-    });
-
-    // Extract type definitions
-    let mut definitions = Vec::new();
-
-    for result in all_results.iter().take(limit) {
-        if let Some(source_crate) = &result.source_crate
-            && let Some((_, doc)) = loaded_crates.iter().find(|(name, _)| name == source_crate)
-                && let Some(id) = &result.id
-                    && let Some(item) = doc.get_item(id)
-                        && let Some(def) = extract_type_definition(item, doc, source_crate.clone()) {
-                            definitions.push(def);
-                        }
-    }
-
-    Ok((definitions, loaded_crates))
-}
-
-fn extract_type_definition(item: &Item, doc: &DocIndex, source_crate: String) -> Option<TypeDefinition> {
+/// Extracts type information (struct/enum/union) from a rustdoc Item.
+/// Returns None for non-type items. Used by type formatting to generate Rust syntax.
+pub fn extract_type_definition(
+    item: &Item,
+    index: &CrateIndex,
+    source_crate: String,
+) -> Option<TypeInfo> {
     let name = item.name.as_ref()?.clone();
     let docs = item.docs.clone();
-    let path = doc.get_item_path(item);
+    let path = index.get_item_path(item);
     let item_id = item.id;
 
     match &item.inner {
         ItemEnum::Struct(s) => {
-            let fields = extract_struct_fields(&s.kind, doc);
-            Some(TypeDefinition {
+            let fields = extract_struct_fields(&s.kind, index);
+            Some(TypeInfo {
                 name,
                 kind: "struct".to_string(),
                 path,
@@ -102,8 +61,8 @@ fn extract_type_definition(item: &Item, doc: &DocIndex, source_crate: String) ->
             })
         }
         ItemEnum::Enum(e) => {
-            let variants = extract_enum_variants(&e.variants, doc);
-            Some(TypeDefinition {
+            let variants = extract_enum_variants(&e.variants, index);
+            Some(TypeInfo {
                 name,
                 kind: "enum".to_string(),
                 path,
@@ -116,8 +75,8 @@ fn extract_type_definition(item: &Item, doc: &DocIndex, source_crate: String) ->
             })
         }
         ItemEnum::Union(u) => {
-            let fields = extract_union_fields(&u.fields, doc);
-            Some(TypeDefinition {
+            let fields = extract_union_fields(&u.fields, index);
+            Some(TypeInfo {
                 name,
                 kind: "union".to_string(),
                 path,
@@ -133,13 +92,14 @@ fn extract_type_definition(item: &Item, doc: &DocIndex, source_crate: String) ->
     }
 }
 
-fn extract_struct_fields(kind: &rustdoc_types::StructKind, doc: &DocIndex) -> Vec<FieldInfo> {
+/// Extracts public fields from a struct, handling plain/tuple/unit structs.
+fn extract_struct_fields(kind: &rustdoc_types::StructKind, index: &CrateIndex) -> Vec<FieldInfo> {
     match kind {
         rustdoc_types::StructKind::Plain { fields, .. } => {
             fields
                 .iter()
                 .filter_map(|field_id| {
-                    let field_item = doc.get_item(field_id)?;
+                    let field_item = index.get_item(field_id)?;
 
                     // Only include public fields
                     if !matches!(field_item.visibility, rustdoc_types::Visibility::Public) {
@@ -148,8 +108,11 @@ fn extract_struct_fields(kind: &rustdoc_types::StructKind, doc: &DocIndex) -> Ve
 
                     if let ItemEnum::StructField(ty) = &field_item.inner {
                         Some(FieldInfo {
-                            name: field_item.name.clone().unwrap_or_else(|| "<unnamed>".to_string()),
-                            type_name: doc.format_type(ty),
+                            name: field_item
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| "<unnamed>".to_string()),
+                            type_name: index.format_type(ty),
                             docs: field_item.docs.clone(),
                             visibility: "pub".to_string(),
                         })
@@ -165,7 +128,7 @@ fn extract_struct_fields(kind: &rustdoc_types::StructKind, doc: &DocIndex) -> Ve
                 .enumerate()
                 .filter_map(|(idx, field_id_opt)| {
                     let field_id = field_id_opt.as_ref()?;
-                    let field_item = doc.get_item(field_id)?;
+                    let field_item = index.get_item(field_id)?;
 
                     // Only include public fields
                     if !matches!(field_item.visibility, rustdoc_types::Visibility::Public) {
@@ -175,7 +138,7 @@ fn extract_struct_fields(kind: &rustdoc_types::StructKind, doc: &DocIndex) -> Ve
                     if let ItemEnum::StructField(ty) = &field_item.inner {
                         Some(FieldInfo {
                             name: idx.to_string(),
-                            type_name: doc.format_type(ty),
+                            type_name: index.format_type(ty),
                             docs: field_item.docs.clone(),
                             visibility: "pub".to_string(),
                         })
@@ -189,11 +152,12 @@ fn extract_struct_fields(kind: &rustdoc_types::StructKind, doc: &DocIndex) -> Ve
     }
 }
 
-fn extract_union_fields(fields: &[rustdoc_types::Id], doc: &DocIndex) -> Vec<FieldInfo> {
+/// Extracts public fields from a union.
+fn extract_union_fields(fields: &[rustdoc_types::Id], index: &CrateIndex) -> Vec<FieldInfo> {
     fields
         .iter()
         .filter_map(|field_id| {
-            let field_item = doc.get_item(field_id)?;
+            let field_item = index.get_item(field_id)?;
 
             // Only include public fields
             if !matches!(field_item.visibility, rustdoc_types::Visibility::Public) {
@@ -202,8 +166,11 @@ fn extract_union_fields(fields: &[rustdoc_types::Id], doc: &DocIndex) -> Vec<Fie
 
             if let ItemEnum::StructField(ty) = &field_item.inner {
                 Some(FieldInfo {
-                    name: field_item.name.clone().unwrap_or_else(|| "<unnamed>".to_string()),
-                    type_name: doc.format_type(ty),
+                    name: field_item
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "<unnamed>".to_string()),
+                    type_name: index.format_type(ty),
                     docs: field_item.docs.clone(),
                     visibility: "pub".to_string(),
                 })
@@ -214,14 +181,18 @@ fn extract_union_fields(fields: &[rustdoc_types::Id], doc: &DocIndex) -> Vec<Fie
         .collect()
 }
 
-fn extract_enum_variants(variants: &[rustdoc_types::Id], doc: &DocIndex) -> Vec<VariantInfo> {
+/// Extracts variants from an enum, handling plain/tuple/struct variants.
+fn extract_enum_variants(variants: &[rustdoc_types::Id], index: &CrateIndex) -> Vec<VariantInfo> {
     variants
         .iter()
         .filter_map(|variant_id| {
-            let variant_item = doc.get_item(variant_id)?;
+            let variant_item = index.get_item(variant_id)?;
 
             if let ItemEnum::Variant(v) = &variant_item.inner {
-                let name = variant_item.name.clone().unwrap_or_else(|| "<unnamed>".to_string());
+                let name = variant_item
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "<unnamed>".to_string());
                 let docs = variant_item.docs.clone();
 
                 let (tuple_fields, struct_fields) = match &v.kind {
@@ -231,9 +202,9 @@ fn extract_enum_variants(variants: &[rustdoc_types::Id], doc: &DocIndex) -> Vec<
                             .iter()
                             .filter_map(|field_id_opt| {
                                 let field_id = field_id_opt.as_ref()?;
-                                let field_item = doc.get_item(field_id)?;
+                                let field_item = index.get_item(field_id)?;
                                 if let ItemEnum::StructField(ty) = &field_item.inner {
-                                    Some(doc.format_type(ty))
+                                    Some(index.format_type(ty))
                                 } else {
                                     None
                                 }
@@ -245,17 +216,23 @@ fn extract_enum_variants(variants: &[rustdoc_types::Id], doc: &DocIndex) -> Vec<
                         let strukt = fields
                             .iter()
                             .filter_map(|field_id| {
-                                let field_item = doc.get_item(field_id)?;
+                                let field_item = index.get_item(field_id)?;
 
                                 // Only include public fields
-                                if !matches!(field_item.visibility, rustdoc_types::Visibility::Public) {
+                                if !matches!(
+                                    field_item.visibility,
+                                    rustdoc_types::Visibility::Public
+                                ) {
                                     return None;
                                 }
 
                                 if let ItemEnum::StructField(ty) = &field_item.inner {
                                     Some(FieldInfo {
-                                        name: field_item.name.clone().unwrap_or_else(|| "<unnamed>".to_string()),
-                                        type_name: doc.format_type(ty),
+                                        name: field_item
+                                            .name
+                                            .clone()
+                                            .unwrap_or_else(|| "<unnamed>".to_string()),
+                                        type_name: index.format_type(ty),
                                         docs: field_item.docs.clone(),
                                         visibility: "pub".to_string(),
                                     })
