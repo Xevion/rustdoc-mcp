@@ -1,9 +1,9 @@
 use assert2::{check, let_assert};
-use cargo_doc_mcp::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
-use cargo_doc_mcp::{
+use rstest::{fixture, rstest};
+use rustdoc_mcp::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
+use rustdoc_mcp::{
     CrateMetadata, CrateOrigin, DetailLevel, ItemKind, ServerContext, WorkspaceContext,
 };
-use rstest::{fixture, rstest};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -44,9 +44,9 @@ fn test_context() -> ServerContext {
 
     let metadata = WorkspaceContext {
         root: project_root,
-        members: vec!["cargo-doc-mcp".to_string()],
+        members: vec!["rustdoc-mcp".to_string()],
         crate_info,
-        root_crate: Some("cargo-doc-mcp".to_string()),
+        root_crate: Some("rustdoc-mcp".to_string()),
     };
     context.set_workspace_context(metadata);
 

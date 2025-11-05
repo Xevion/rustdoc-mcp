@@ -1,5 +1,5 @@
-use cargo_doc_mcp::server::{ItemServer, spawn_workspace_detection};
 use rmcp::{ServiceExt, transport::stdio};
+use rustdoc_mcp::server::{ItemServer, spawn_workspace_detection};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .init();
 
-    tracing::info!("Starting cargo-doc-mcp MCP server");
+    tracing::info!("Starting rustdoc-mcp MCP server");
 
     // Create the MCP server
     let server = ItemServer::new();

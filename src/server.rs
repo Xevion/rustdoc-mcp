@@ -205,7 +205,7 @@ impl ItemServer {
         // Get current workspace before changing it
         let old_workspace = {
             let state = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("cargo-doc-mcp: Context state corrupted, aborting");
+                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
                 std::process::abort();
             });
             state.working_directory().cloned()
@@ -220,7 +220,7 @@ impl ItemServer {
         // Update context
         {
             let mut state = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("cargo-doc-mcp: Context state corrupted, aborting");
+                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
                 std::process::abort();
             });
             state
@@ -251,7 +251,7 @@ impl ItemServer {
         // Clone context to avoid holding lock across await
         let state = {
             let guard = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("cargo-doc-mcp: Context state corrupted, aborting");
+                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
                 std::process::abort();
             });
             guard.clone()
@@ -274,7 +274,7 @@ impl ItemServer {
         // Clone context to avoid holding lock across await
         let state = {
             let guard = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("cargo-doc-mcp: Context state corrupted, aborting");
+                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
                 std::process::abort();
             });
             guard.clone()
@@ -297,7 +297,7 @@ impl ItemServer {
         // Clone context to avoid holding lock across await
         let state = {
             let guard = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("cargo-doc-mcp: Context state corrupted, aborting");
+                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
                 std::process::abort();
             });
             guard.clone()
@@ -320,7 +320,7 @@ impl ServerHandler for ItemServer {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "cargo-doc-mcp: A focused Rust documentation server with beautiful syntax formatting. Automatically detects workspace on startup. Use set_workspace to override if needed."
+                "rustdoc-mcp: A focused Rust documentation server with beautiful syntax formatting. Automatically detects workspace on startup. Use set_workspace to override if needed."
                     .to_string(),
             ),
         }
@@ -339,7 +339,7 @@ pub async fn spawn_workspace_detection(context: Arc<Mutex<ServerContext>>) {
                 Ok((canonical_path, workspace_info, _changed)) => {
                     // Update context with auto-detected workspace
                     let mut state = context.lock().unwrap_or_else(|_poisoned| {
-                        tracing::error!("cargo-doc-mcp: Context state corrupted, aborting");
+                        tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
                         std::process::abort();
                     });
 

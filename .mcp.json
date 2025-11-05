@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "cargo-doc-mcp": {
+    "rustdoc-mcp": {
       "type": "stdio",
-      "command": "cargo-doc-mcp",
+      "command": "rustdoc-mcp",
       "args": [],
       "env": {}
     }

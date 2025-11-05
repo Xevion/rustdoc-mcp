@@ -13,7 +13,7 @@ use std::hash::{Hash as StdHash, Hasher};
 use std::path::Path;
 use std::str::FromStr;
 
-/// Type-safe representation of hash values used throughout cargo-doc-mcp.
+/// Type-safe representation of hash values used throughout rustdoc-mcp.
 ///
 /// Provides unified handling of different hash types with proper serialization,
 /// validation, and display formatting.

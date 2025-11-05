@@ -11,7 +11,7 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 // Re-export type building function and formatter trait
-pub use builders::{build_type_syntax, extract_id_from_type, TypeFormatter};
+pub use builders::{TypeFormatter, build_type_syntax, extract_id_from_type};
 
 /// Format a type definition using syn + prettyplease for consistent, beautiful output
 pub fn format_type_with_detail_level(

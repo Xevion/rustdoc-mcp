@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-/// A specialized Result type for cargo-doc-mcp operations.
+/// A specialized Result type for rustdoc-mcp operations.
 ///
 /// This is an alias for `anyhow::Result` with context added via `.context()` and
 /// `.with_context()` methods throughout the codebase.
