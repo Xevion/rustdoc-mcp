@@ -4,6 +4,7 @@ use rustdoc_mcp::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
 use rustdoc_mcp::{
     CrateMetadata, CrateOrigin, DetailLevel, ItemKind, ServerContext, WorkspaceContext,
 };
+use serial_test::serial;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -55,6 +56,7 @@ fn test_context() -> ServerContext {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn inspect_finds_serialize_trait(test_context: ServerContext) {
     let request = InspectItemRequest {
         query: "serde::Serialize".to_string(),
@@ -72,6 +74,7 @@ async fn inspect_finds_serialize_trait(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn inspect_successful_simple_lookup(test_context: ServerContext) {
     let request = InspectItemRequest {
         query: "serde::Deserialize".to_string(),
@@ -89,6 +92,7 @@ async fn inspect_successful_simple_lookup(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn inspect_successful_qualified_path(test_context: ServerContext) {
     let request = InspectItemRequest {
         query: "serde::Serialize".to_string(),
@@ -106,6 +110,7 @@ async fn inspect_successful_qualified_path(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn inspect_no_matches_found(test_context: ServerContext) {
     let request = InspectItemRequest {
         query: "NonExistentItemXYZ123".to_string(),
@@ -121,6 +126,7 @@ async fn inspect_no_matches_found(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn inspect_minimal_verbosity(test_context: ServerContext) {
     let request = InspectItemRequest {
         query: "serde::Deserialize".to_string(),
@@ -139,6 +145,7 @@ async fn inspect_minimal_verbosity(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn inspect_full_verbosity(test_context: ServerContext) {
     let request = InspectItemRequest {
         query: "serde::Deserialize".to_string(),
@@ -158,6 +165,7 @@ async fn inspect_full_verbosity(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn inspect_function_lookup(test_context: ServerContext) {
     let request = InspectItemRequest {
         query: "serde_json::to_string".to_string(),
@@ -175,6 +183,7 @@ async fn inspect_function_lookup(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
+#[serial]
 async fn inspect_enum_with_variants(test_context: ServerContext) {
     let request = InspectItemRequest {
         query: "serde_json::Value".to_string(),
