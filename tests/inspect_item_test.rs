@@ -256,13 +256,13 @@ async fn inspect_local_backgroundworker(isolated_workspace: IsolatedWorkspace) {
     check!(output.contains("struct"));
 }
 
-/// Test: Find ServerContext with full path using hyphenated crate name.
+/// Test: Find WorkspaceContext with full path using hyphenated crate name.
 /// This tests if the crate name normalization works correctly.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_local_with_hyphenated_crate_name(isolated_workspace: IsolatedWorkspace) {
     let request = InspectItemRequest {
-        query: "rustdoc-mcp::ServerContext".to_string(),
+        query: "rustdoc-mcp::WorkspaceContext".to_string(),
         kind: Some(ItemKind::Struct),
         detail_level: DetailLevel::Medium,
     };
@@ -270,10 +270,10 @@ async fn inspect_local_with_hyphenated_crate_name(isolated_workspace: IsolatedWo
     let result = handle_inspect_item(&isolated_workspace.state, request).await;
     check!(
         result.is_ok(),
-        "Should find ServerContext with hyphenated crate name: {:?}",
+        "Should find WorkspaceContext with hyphenated crate name: {:?}",
         result
     );
 
     let output = result.unwrap();
-    check!(output.contains("ServerContext"));
+    check!(output.contains("WorkspaceContext"));
 }

@@ -13,7 +13,6 @@ use rmcp::{
     schemars::{self, JsonSchema, generate::SchemaSettings},
     tool, tool_handler, tool_router,
 };
-use std::borrow::Cow;
 use std::sync::Arc;
 
 /// Parameters for set_workspace tool
@@ -158,26 +157,6 @@ impl ServerHandler for ItemServer {
             ),
         }
     }
-}
-
-/// Expands tilde (`~`) in a path to the user's home directory.
-///
-/// - `~/foo` becomes `/home/user/foo`
-/// - `~` becomes `/home/user`
-/// - Other paths are returned unchanged
-///
-/// Returns `Cow::Borrowed` if no expansion needed, `Cow::Owned` if expanded.
-pub fn expand_tilde(path: &str) -> Cow<'_, str> {
-    if let Some(stripped) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return Cow::Owned(home.join(stripped).display().to_string());
-        }
-    } else if path == "~"
-        && let Some(home) = dirs::home_dir()
-    {
-        return Cow::Owned(home.display().to_string());
-    }
-    Cow::Borrowed(path)
 }
 
 /// Generate an inline JSON schema for MCP tools

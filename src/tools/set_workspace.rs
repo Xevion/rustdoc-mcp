@@ -24,7 +24,7 @@ pub async fn handle_set_workspace(
     }
 
     // Expand tilde and convert to PathBuf
-    let expanded = crate::search::expand_tilde(&path);
+    let expanded = crate::workspace::expand_tilde(&path);
     let path_buf = PathBuf::from(expanded.as_ref());
 
     // Canonicalize the path

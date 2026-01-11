@@ -298,6 +298,29 @@ pub fn has_workspace_section(cargo_toml: &Path) -> Option<bool> {
     Some(has_workspace)
 }
 
+/// Expand tilde (`~`) in paths to the user's home directory.
+///
+/// Examples:
+/// - `~/projects/foo` becomes `/home/user/projects/foo`
+/// - `~` becomes `/home/user`
+/// - Other paths are returned unchanged
+///
+/// Returns `Cow::Borrowed` if no expansion needed, `Cow::Owned` if expanded.
+pub fn expand_tilde(path: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+
+    if let Some(stripped) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return Cow::Owned(home.join(stripped).display().to_string());
+        }
+    } else if path == "~"
+        && let Some(home) = dirs::home_dir()
+    {
+        return Cow::Owned(home.display().to_string());
+    }
+    Cow::Borrowed(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,7 +4,6 @@
 //! along with utilities for item kind matching and conversion.
 
 use crate::error::Result;
-use crate::item::TraitImplInfo;
 use anyhow::Context;
 use rmcp::schemars;
 use rustdoc_types::{
@@ -14,6 +13,13 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
 use std::path::Path;
+
+/// Information about a trait implementation.
+#[derive(Debug, Clone)]
+pub struct TraitImplInfo {
+    pub trait_name: Option<String>,
+    pub methods: Vec<Id>,
+}
 
 /// DO NOT add doc comments to individual variants - this causes schemars to generate
 /// `oneOf` schemas instead of simple `enum` arrays, breaking MCP client enum handling.

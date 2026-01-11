@@ -123,19 +123,35 @@ pub async fn handle_search(
         return Ok(msg);
     }
 
-    // Format results with normalized scores
+    Ok(format_search_results(
+        &results,
+        &request.query,
+        &request.crate_name,
+        &query_ctx,
+        false,
+    ))
+}
+
+/// Format search results into a readable string output.
+fn format_search_results(
+    results: &[crate::search::SearchMatch],
+    query: &str,
+    crate_name: &str,
+    query_ctx: &QueryContext,
+    is_stdlib: bool,
+) -> String {
+    let source = if is_stdlib { " (standard library)" } else { "" };
+
     let mut output = format!(
-        "Search results for '{}' in '{}':\n\n",
-        request.query, request.crate_name
+        "Search results for '{}' in '{}'{}:\n\n",
+        query, crate_name, source
     );
 
-    // Normalize scores to 0-100% scale
     let max_score = results.first().map(|r| r.rank).unwrap_or(1.0);
 
     for (idx, result) in results.iter().enumerate() {
         let relevance = ((result.rank / max_score) * 100.0).round() as u8;
 
-        // Resolve the item from item_path
         match query_ctx.get_item_from_id_path(&result.item.crate_name, &result.item.item_path) {
             Some((item, path_segments)) => {
                 let path = path_segments.join("::");
@@ -149,7 +165,6 @@ pub async fn handle_search(
                     ))
                     .unwrap();
 
-                // Add summary documentation if available
                 if let Some(docs) = item.comment() {
                     let first_line = docs
                         .lines()
@@ -176,7 +191,7 @@ pub async fn handle_search(
         output.push('\n');
     }
 
-    Ok(output)
+    output
 }
 
 /// Handle search for stdlib crates without a workspace.
@@ -236,55 +251,11 @@ async fn handle_stdlib_search(
         return Ok(msg);
     }
 
-    // Format results
-    let mut output = format!(
-        "Search results for '{}' in '{}' (standard library):\n\n",
-        request.query, request.crate_name
-    );
-
-    let max_score = results.first().map(|r| r.rank).unwrap_or(1.0);
-
-    for (idx, result) in results.iter().enumerate() {
-        let relevance = ((result.rank / max_score) * 100.0).round() as u8;
-
-        match query_ctx.get_item_from_id_path(&result.item.crate_name, &result.item.item_path) {
-            Some((item, path_segments)) => {
-                let path = path_segments.join("::");
-                output
-                    .write_fmt(format_args!(
-                        "{}. `{}` ({:?}) - relevance: {}%\n",
-                        idx + 1,
-                        path,
-                        item.kind(),
-                        relevance
-                    ))
-                    .unwrap();
-
-                if let Some(docs) = item.comment() {
-                    let first_line = docs
-                        .lines()
-                        .find(|line| !line.trim().is_empty())
-                        .unwrap_or("");
-                    if !first_line.is_empty() {
-                        output
-                            .write_fmt(format_args!("   {}\n", first_line.trim()))
-                            .unwrap();
-                    }
-                }
-            }
-            None => {
-                output
-                    .write_fmt(format_args!(
-                        "{}. [Unable to resolve item] - relevance: {}%\n",
-                        idx + 1,
-                        relevance
-                    ))
-                    .unwrap();
-            }
-        };
-
-        output.push('\n');
-    }
-
-    Ok(output)
+    Ok(format_search_results(
+        &results,
+        &request.query,
+        &request.crate_name,
+        &query_ctx,
+        true,
+    ))
 }

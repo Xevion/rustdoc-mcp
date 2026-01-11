@@ -12,12 +12,12 @@ pub mod workspace;
 pub use cache::Hash;
 pub use error::LoadError;
 pub use format::DetailLevel;
-pub use item::{ItemRef, TraitImplInfo};
+pub use item::ItemRef;
 pub use search::{
     CrateIndex, DetailedSearchResult, ItemKind, PathSuggestion, QueryContext, TermIndex,
-    expand_tilde,
+    TraitImplInfo,
 };
 pub use server::{ItemServer, inline_schema_for_type};
 pub use stdlib::StdlibDocs;
 pub use worker::{BackgroundWorker, DocState, spawn_background_worker};
-pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};
+pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext, expand_tilde};
