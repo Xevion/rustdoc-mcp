@@ -6,7 +6,6 @@ use crate::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
 use crate::tools::search::{SearchRequest, handle_search};
 use crate::tools::set_workspace::{format_response, handle_set_workspace};
 use crate::worker::DocState;
-use crate::workspace::WorkspaceContext;
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -15,62 +14,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use std::borrow::Cow;
-use std::path::PathBuf;
 use std::sync::Arc;
-
-/// Legacy server context for backward compatibility.
-///
-/// This wraps DocState to provide the old API that tool handlers expect.
-/// It's a transitional type that will be phased out as tools migrate to DocState.
-#[derive(Debug, Clone)]
-pub struct ServerContext {
-    /// Reference to the shared DocState
-    state: Arc<DocState>,
-}
-
-impl ServerContext {
-    /// Create a new server context wrapping DocState.
-    pub fn new(state: Arc<DocState>) -> Self {
-        Self { state }
-    }
-
-    /// Get the underlying DocState.
-    pub fn doc_state(&self) -> &Arc<DocState> {
-        &self.state
-    }
-
-    /// Get the current working directory (blocking).
-    pub fn working_directory(&self) -> Option<PathBuf> {
-        // Use block_in_place for sync access from async context
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.state.working_directory())
-        })
-    }
-
-    /// Get cached workspace context (blocking).
-    pub fn workspace_context(&self) -> Option<WorkspaceContext> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.state.workspace())
-        })
-    }
-
-    /// Get the Cargo.lock path (blocking).
-    pub fn cargo_lock_path(&self) -> Option<PathBuf> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.state.cargo_lock_path())
-        })
-    }
-
-    /// Get the stdlib documentation provider.
-    pub fn stdlib(&self) -> Option<&Arc<StdlibDocs>> {
-        self.state.stdlib()
-    }
-
-    /// Check if stdlib is available.
-    pub fn has_stdlib(&self) -> bool {
-        self.state.stdlib().is_some()
-    }
-}
 
 /// Parameters for set_workspace tool
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -110,11 +54,6 @@ impl ItemServer {
     /// Get a reference to the shared DocState.
     pub fn doc_state(&self) -> &Arc<DocState> {
         &self.state
-    }
-
-    /// Get a ServerContext wrapper for legacy tool handler compatibility.
-    pub fn server_context(&self) -> ServerContext {
-        ServerContext::new(self.state.clone())
     }
 
     #[tool(
@@ -169,8 +108,7 @@ impl ItemServer {
         &self,
         Parameters(request): Parameters<InspectCrateRequest>,
     ) -> std::result::Result<String, String> {
-        let context = self.server_context();
-        handle_inspect_crate(&context, request)
+        handle_inspect_crate(&self.state, request)
             .await
             .map_err(|e| e.to_string())
     }
@@ -183,8 +121,7 @@ impl ItemServer {
         &self,
         Parameters(request): Parameters<InspectItemRequest>,
     ) -> std::result::Result<String, String> {
-        let context = self.server_context();
-        handle_inspect_item(&context, request)
+        handle_inspect_item(&self.state, request)
             .await
             .map_err(|e| e.to_string())
     }
@@ -197,8 +134,7 @@ impl ItemServer {
         &self,
         Parameters(request): Parameters<SearchRequest>,
     ) -> std::result::Result<String, String> {
-        let context = self.server_context();
-        handle_search(&context, request)
+        handle_search(&self.state, request)
             .await
             .map_err(|e| e.to_string())
     }

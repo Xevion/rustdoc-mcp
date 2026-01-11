@@ -30,7 +30,7 @@
 
 use rstest::fixture;
 use rustdoc_mcp::tools::search::{SearchRequest, handle_search};
-use rustdoc_mcp::{CrateMetadata, CrateOrigin, DocState, ServerContext, WorkspaceContext};
+use rustdoc_mcp::{CrateMetadata, CrateOrigin, DocState, WorkspaceContext};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -180,11 +180,11 @@ impl Default for TempWorkspace {
 /// Copies rustdoc JSON to a temp directory to ensure fresh index builds.
 /// Each test using this gets complete isolation from other tests.
 ///
-/// Composes [`TempWorkspace`] with MCP-specific setup (ServerContext, DocState).
+/// Composes [`TempWorkspace`] with MCP-specific setup (DocState).
 #[allow(dead_code)] // Fields used across different integration test crates
 pub struct IsolatedWorkspace {
     workspace: TempWorkspace,
-    pub context: ServerContext,
+    pub state: Arc<DocState>,
 }
 
 #[allow(dead_code)] // Methods used across different integration test crates
@@ -294,9 +294,7 @@ impl IsolatedWorkspace {
             });
         });
 
-        let context = ServerContext::new(state);
-
-        Self { workspace, context }
+        Self { workspace, state }
     }
 
     /// Returns the root path of this workspace.
@@ -320,9 +318,9 @@ impl Default for IsolatedWorkspace {
 ///
 /// Tests using this fixture can run in parallel without interference.
 ///
-/// **Important**: This returns `IsolatedWorkspace` not just `ServerContext` because
-/// the temp directory must stay alive for the duration of the test. Use `.context`
-/// to get the ServerContext for tool handlers.
+/// **Important**: This returns `IsolatedWorkspace` not just `Arc<DocState>` because
+/// the temp directory must stay alive for the duration of the test. Use `.state`
+/// to get the DocState for tool handlers.
 #[fixture]
 pub fn isolated_workspace() -> IsolatedWorkspace {
     IsolatedWorkspace::new()
@@ -337,7 +335,7 @@ pub fn isolated_workspace_with_serde() -> IsolatedWorkspace {
     IsolatedWorkspace::with_deps(&["rustdoc-mcp", "serde", "serde_json", "serde_core"])
 }
 
-/// Creates a ServerContext using the real project directory (shared state).
+/// Creates an `Arc<DocState>` using the real project directory (shared state).
 ///
 /// **Use with caution!** This fixture uses the actual `target/doc/` directory,
 /// which means:
@@ -347,7 +345,7 @@ pub fn isolated_workspace_with_serde() -> IsolatedWorkspace {
 ///
 /// Prefer `isolated_workspace` unless you specifically need to test shared-state behavior.
 #[fixture]
-pub fn shared_context() -> ServerContext {
+pub fn shared_state() -> Arc<DocState> {
     let project_root = project_root();
 
     // Build crate_info for all crates we want to test against
@@ -418,7 +416,7 @@ pub fn shared_context() -> ServerContext {
         });
     });
 
-    ServerContext::new(state)
+    state
 }
 
 /// Warms the search index cache by triggering index builds.
@@ -428,7 +426,7 @@ pub fn shared_context() -> ServerContext {
 /// files created in the workspace's `target/doc/` directory.
 ///
 /// # Arguments
-/// * `context` - The ServerContext to warm
+/// * `state` - The DocState to warm
 /// * `crates` - List of crate names to warm (e.g., `["rustdoc-mcp"]`)
 ///
 /// # Example
@@ -437,19 +435,19 @@ pub fn shared_context() -> ServerContext {
 /// #[tokio::test(flavor = "multi_thread")]
 /// async fn test_warm_cache_behavior(isolated_workspace: IsolatedWorkspace) {
 ///     // Warm the cache first
-///     warm_cache(&isolated_workspace.context, &["rustdoc-mcp"]).await;
+///     warm_cache(&isolated_workspace.state, &["rustdoc-mcp"]).await;
 ///
 ///     // Now test with warm cache
-///     let result = handle_search(&isolated_workspace.context, ...).await;
+///     let result = handle_search(&isolated_workspace.state, ...).await;
 /// }
 /// ```
 #[allow(dead_code)] // Used in search_test.rs
-pub async fn warm_cache(context: &ServerContext, crates: &[&str]) {
+pub async fn warm_cache(state: &Arc<DocState>, crates: &[&str]) {
     for crate_name in crates {
         // Trigger a search to force index build
         // Using a minimal query that will still trigger indexing
         let _ = handle_search(
-            context,
+            state,
             SearchRequest {
                 query: "_warmup_".to_string(),
                 crate_name: crate_name.to_string(),

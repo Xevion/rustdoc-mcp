@@ -2,8 +2,8 @@
 
 use crate::{
     search::{QueryContext, TermIndex},
-    server::ServerContext,
     stdlib::StdlibDocs,
+    worker::DocState,
     workspace::{CrateMetadata, CrateOrigin, WorkspaceContext},
 };
 use rmcp::schemars;
@@ -27,22 +27,22 @@ fn default_limit() -> Option<usize> {
 
 /// Execute the search operation using TF-IDF indexing.
 pub async fn handle_search(
-    context: &ServerContext,
+    state: &Arc<DocState>,
     request: SearchRequest,
 ) -> Result<String, String> {
     // Check if searching a stdlib crate
     if StdlibDocs::is_stdlib_crate(&request.crate_name)
-        && let Some(stdlib) = context.stdlib()
+        && let Some(stdlib) = state.stdlib()
     {
         return handle_stdlib_search(stdlib, &request).await;
     }
 
     // Try workspace-based search
-    let workspace_ctx = match context.workspace_context() {
+    let workspace_ctx = match state.workspace().await {
         Some(ctx) => ctx,
         None => {
             // No workspace - check if we can search stdlib
-            if let Some(stdlib) = context.stdlib() {
+            if let Some(stdlib) = state.stdlib() {
                 if StdlibDocs::is_stdlib_crate(&request.crate_name) {
                     return handle_stdlib_search(stdlib, &request).await;
                 }

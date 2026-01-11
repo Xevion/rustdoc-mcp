@@ -5,8 +5,8 @@ use crate::search::{
     DetailedSearchResult, ItemKind, QueryContext, TermIndex, item_kind_str, matches_kind,
     parse_item_path, resolve_crate_from_path,
 };
-use crate::server::ServerContext;
 use crate::stdlib::StdlibDocs;
+use crate::worker::DocState;
 
 use rmcp::schemars;
 use rustdoc_types::{Item, ItemEnum};
@@ -34,7 +34,7 @@ fn default_detail_level() -> DetailLevel {
 /// Handles inspect_item requests by resolving paths or searching across crates.
 /// Attempts path resolution first for explicit paths, falls back to fuzzy search if needed.
 pub async fn handle_inspect_item(
-    context: &ServerContext,
+    state: &Arc<DocState>,
     request: InspectItemRequest,
 ) -> Result<String, String> {
     // Parse the item path to check if it targets stdlib
@@ -48,16 +48,16 @@ pub async fn handle_inspect_item(
         .unwrap_or(false);
 
     // If targeting stdlib and stdlib is available, handle it directly
-    if targets_stdlib && let Some(stdlib) = context.stdlib() {
+    if targets_stdlib && let Some(stdlib) = state.stdlib() {
         return handle_stdlib_inspect(stdlib, &request).await;
     }
 
     // Try workspace-based lookup
-    let workspace_ctx = match context.workspace_context() {
+    let workspace_ctx = match state.workspace().await {
         Some(ctx) => ctx,
         None => {
             // No workspace - try stdlib fallback for common types
-            if let Some(stdlib) = context.stdlib() {
+            if let Some(stdlib) = state.stdlib() {
                 // Try to find common types in stdlib (Vec, HashMap, String, etc.)
                 return handle_stdlib_inspect(stdlib, &request).await
                     .map(|mut result| {
@@ -84,8 +84,9 @@ pub async fn handle_inspect_item(
     let mut path = parse_item_path(&request.query);
 
     // Verify workspace is configured
-    context
+    state
         .working_directory()
+        .await
         .ok_or_else(|| "No working directory configured. Use set_workspace first.".to_string())?;
 
     // Build list of known crates (members + dependencies)

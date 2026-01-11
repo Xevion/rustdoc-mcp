@@ -16,7 +16,7 @@ async fn inspect_finds_serialize_trait(isolated_workspace_with_serde: IsolatedWo
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -34,7 +34,7 @@ async fn inspect_successful_simple_lookup(isolated_workspace_with_serde: Isolate
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -52,7 +52,7 @@ async fn inspect_successful_qualified_path(isolated_workspace_with_serde: Isolat
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -69,7 +69,7 @@ async fn inspect_no_matches_found(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace.state, request).await;
     let_assert!(Err(err) = result);
     check!(err.contains("No items found matching"));
     check!(err.contains("NonExistentItemXYZ123"));
@@ -85,7 +85,7 @@ async fn inspect_minimal_verbosity(isolated_workspace_with_serde: IsolatedWorksp
         detail_level: DetailLevel::Low,
     };
 
-    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -104,7 +104,7 @@ async fn inspect_full_verbosity(isolated_workspace_with_serde: IsolatedWorkspace
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -123,7 +123,7 @@ async fn inspect_function_lookup(isolated_workspace_with_serde: IsolatedWorkspac
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -140,7 +140,7 @@ async fn inspect_enum_with_variants(isolated_workspace_with_serde: IsolatedWorks
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -159,7 +159,7 @@ async fn inspect_local_struct_simple_name(isolated_workspace: IsolatedWorkspace)
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace.state, request).await;
     check!(result.is_ok(), "Should find QueryContext by simple name");
 
     let output = result.unwrap();
@@ -183,7 +183,7 @@ async fn inspect_local_struct_full_path(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace.state, request).await;
     check!(
         result.is_ok(),
         "Should find QueryContext by full path: {:?}",
@@ -205,7 +205,7 @@ async fn inspect_local_module(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace.state, request).await;
     check!(result.is_ok(), "Should find workspace module: {:?}", result);
 
     let output = result.unwrap();
@@ -222,7 +222,7 @@ async fn inspect_local_trait(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace.state, request).await;
     check!(
         result.is_ok(),
         "Should find TypeFormatter trait: {:?}",
@@ -244,7 +244,7 @@ async fn inspect_local_backgroundworker(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace.state, request).await;
     check!(
         result.is_ok(),
         "Should find BackgroundWorker struct: {:?}",
@@ -267,7 +267,7 @@ async fn inspect_local_with_hyphenated_crate_name(isolated_workspace: IsolatedWo
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    let result = handle_inspect_item(&isolated_workspace.state, request).await;
     check!(
         result.is_ok(),
         "Should find ServerContext with hyphenated crate name: {:?}",

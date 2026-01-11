@@ -17,7 +17,7 @@ pub use search::{
     CrateIndex, DetailedSearchResult, ItemKind, PathSuggestion, QueryContext, TermIndex,
     expand_tilde,
 };
-pub use server::{ItemServer, ServerContext, inline_schema_for_type};
+pub use server::{ItemServer, inline_schema_for_type};
 pub use stdlib::StdlibDocs;
 pub use worker::{BackgroundWorker, DocState, spawn_background_worker};
 pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};

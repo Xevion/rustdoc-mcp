@@ -18,7 +18,7 @@ async fn search_finds_querycontext(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok(), "Search should succeed: {:?}", result);
 
     let output = result.unwrap();
@@ -44,7 +44,7 @@ async fn search_finds_servercontext(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -65,7 +65,7 @@ async fn search_finds_crateorigin(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -86,7 +86,7 @@ async fn search_finds_traititerator(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -112,7 +112,7 @@ async fn search_finds_backgroundworker(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -138,7 +138,7 @@ async fn search_finds_typeformatter_trait(isolated_workspace: IsolatedWorkspace)
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -163,7 +163,7 @@ async fn search_finds_module_cache(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -188,7 +188,7 @@ async fn search_finds_itemref(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -210,7 +210,7 @@ async fn search_finds_serde_serialize(isolated_workspace_with_serde: IsolatedWor
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_search(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -235,7 +235,7 @@ async fn search_finds_serde_deserialize(isolated_workspace_with_serde: IsolatedW
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_search(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -260,7 +260,7 @@ async fn search_finds_serde_deserializer(isolated_workspace_with_serde: Isolated
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_search(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -290,7 +290,7 @@ async fn search_with_fresh_index_build() {
         limit: Some(5),
     };
 
-    let result = handle_search(&workspace.context, request).await;
+    let result = handle_search(&workspace.state, request).await;
     check!(
         result.is_ok(),
         "Fresh index search should succeed: {:?}",
@@ -325,7 +325,7 @@ async fn isolated_workspace_has_no_cached_index() {
 #[tokio::test(flavor = "multi_thread")]
 async fn search_works_with_warm_cache(isolated_workspace: IsolatedWorkspace) {
     // Warm the cache first
-    warm_cache(&isolated_workspace.context, &["rustdoc-mcp"]).await;
+    warm_cache(&isolated_workspace.state, &["rustdoc-mcp"]).await;
 
     // Now search should use cached index
     let request = SearchRequest {
@@ -334,7 +334,7 @@ async fn search_works_with_warm_cache(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     check!(result.is_ok(), "Search should succeed with warm cache");
 
     let output = result.unwrap();
@@ -357,7 +357,7 @@ async fn search_nonexistent_crate_error(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     // Should return Ok with a suggestion message, not an Err
     check!(result.is_ok());
 
@@ -379,7 +379,7 @@ async fn search_empty_query(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.context, request).await;
+    let result = handle_search(&isolated_workspace.state, request).await;
     // Empty query should not panic
     check!(result.is_ok());
 }
@@ -400,7 +400,7 @@ async fn concurrent_searches_same_crate() {
     let queries = ["QueryContext", "ServerContext", "CrateOrigin", "DocState"];
 
     for query in queries {
-        let context = workspace.context.clone();
+        let context = workspace.state.clone();
         let query = query.to_string();
         handles.push(tokio::spawn(async move {
             let request = SearchRequest {
@@ -439,7 +439,7 @@ async fn concurrent_cold_cache_searches() {
     // Launch many concurrent searches simultaneously
     let mut handles = vec![];
     for i in 0..10 {
-        let context = workspace.context.clone();
+        let context = workspace.state.clone();
         handles.push(tokio::spawn(async move {
             let request = SearchRequest {
                 query: "QueryContext".to_string(),
@@ -483,7 +483,7 @@ async fn concurrent_mixed_operations() {
 
     // Start cache warming and searches at the same time
     let warm_handle = {
-        let context = workspace.context.clone();
+        let context = workspace.state.clone();
         tokio::spawn(async move {
             warm_cache(&context, &["rustdoc-mcp"]).await;
         })
@@ -491,7 +491,7 @@ async fn concurrent_mixed_operations() {
 
     let search_handles: Vec<_> = (0..5)
         .map(|i| {
-            let context = workspace.context.clone();
+            let context = workspace.state.clone();
             tokio::spawn(async move {
                 // Small delay to interleave with warming
                 tokio::time::sleep(tokio::time::Duration::from_millis(i * 10)).await;

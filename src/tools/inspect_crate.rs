@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::format::DetailLevel;
 use crate::search::CrateIndex;
-use crate::server::ServerContext;
 use crate::stdlib::StdlibDocs;
+use crate::worker::DocState;
 use crate::workspace::{CrateOrigin, get_docs};
 use anyhow::anyhow;
 use rmcp::schemars;
@@ -10,6 +10,7 @@ use rustdoc_types::ItemEnum;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct InspectCrateRequest {
@@ -41,28 +42,28 @@ fn default_detail_level() -> DetailLevel {
 /// - Common exports
 /// - Usage information
 pub async fn handle_inspect_crate(
-    context: &ServerContext,
+    state: &Arc<DocState>,
     request: InspectCrateRequest,
 ) -> Result<String> {
     // Try workspace first
-    if let Some(workspace_ctx) = context.workspace_context() {
+    if let Some(workspace_ctx) = state.workspace().await {
         return match request.crate_name {
-            None => render_summary_mode(&workspace_ctx, request.detail_level, context).await,
+            None => render_summary_mode(&workspace_ctx, request.detail_level).await,
             Some(crate_name) => {
                 // Check if it's a stdlib crate that we should handle specially
                 if StdlibDocs::is_stdlib_crate(&crate_name)
-                    && let Some(stdlib) = context.stdlib()
+                    && let Some(stdlib) = state.stdlib()
                 {
                     return render_stdlib_detail_mode(&crate_name, stdlib, request.detail_level)
                         .await;
                 }
-                render_detail_mode(&crate_name, &workspace_ctx, request.detail_level, context).await
+                render_detail_mode(&crate_name, &workspace_ctx, request.detail_level, state).await
             }
         };
     }
 
     // No workspace - fall back to stdlib if available
-    let stdlib = context.stdlib().ok_or_else(|| {
+    let stdlib = state.stdlib().ok_or_else(|| {
         anyhow!(
             "No workspace configured and standard library docs not available.\n\
              \n\
@@ -97,7 +98,6 @@ pub async fn handle_inspect_crate(
 async fn render_summary_mode(
     workspace_ctx: &crate::workspace::WorkspaceContext,
     detail_level: DetailLevel,
-    _context: &ServerContext,
 ) -> Result<String> {
     let mut output = String::new();
 
@@ -199,7 +199,7 @@ async fn render_detail_mode(
     crate_name: &str,
     workspace_ctx: &crate::workspace::WorkspaceContext,
     detail_level: DetailLevel,
-    context: &ServerContext,
+    state: &Arc<DocState>,
 ) -> Result<String> {
     let mut output = String::new();
 
@@ -223,8 +223,9 @@ async fn render_detail_mode(
     }
 
     // Try to load documentation
-    let workspace_root = context
+    let workspace_root = state
         .working_directory()
+        .await
         .ok_or_else(|| anyhow!("No working directory configured"))?;
 
     // First try loading existing JSON directly (avoids digest validation)
@@ -238,7 +239,7 @@ async fn render_detail_mode(
         CrateIndex::load(&doc_path)
     } else {
         // JSON doesn't exist, try to generate
-        let cargo_lock_path = context.cargo_lock_path();
+        let cargo_lock_path = state.cargo_lock_path().await;
         let is_workspace_member = meta.origin == CrateOrigin::Local;
         let version = meta.version.as_deref();
 
@@ -553,38 +554,34 @@ async fn render_stdlib_detail_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::ServerContext;
-    use crate::worker::DocState;
     use crate::workspace::{CrateMetadata, WorkspaceContext};
     use assert2::{check, let_assert};
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::sync::Arc;
 
-    /// Create a test ServerContext with no workspace configured.
-    fn test_context() -> ServerContext {
-        let state = Arc::new(DocState::new(None));
-        ServerContext::new(state)
+    /// Create a test DocState with no workspace configured.
+    fn test_state() -> Arc<DocState> {
+        Arc::new(DocState::new(None))
     }
 
-    /// Create a test ServerContext with the given workspace.
-    async fn test_context_with_workspace(workspace: WorkspaceContext) -> ServerContext {
+    /// Create a test DocState with the given workspace.
+    async fn test_state_with_workspace(workspace: WorkspaceContext) -> Arc<DocState> {
         let state = Arc::new(DocState::new(None));
         state
             .set_workspace(workspace.root.clone(), workspace, None)
             .await;
-        ServerContext::new(state)
+        state
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_inspect_crate_no_workspace() {
-        let context = test_context();
+        let state = test_state();
         let request = InspectCrateRequest {
             crate_name: None,
             detail_level: DetailLevel::Medium,
         };
 
-        let result = handle_inspect_crate(&context, request).await;
+        let result = handle_inspect_crate(&state, request).await;
         let_assert!(Err(err) = result);
         // Error should mention both workspace and stdlib not being available
         check!(err.to_string().contains("No workspace configured"));
@@ -637,14 +634,14 @@ mod tests {
             root_crate: Some("my-crate".to_string()),
         };
 
-        let context = test_context_with_workspace(workspace_ctx).await;
+        let state = test_state_with_workspace(workspace_ctx).await;
 
         let request = InspectCrateRequest {
             crate_name: None,
             detail_level: DetailLevel::High,
         };
 
-        let result = handle_inspect_crate(&context, request).await.unwrap();
+        let result = handle_inspect_crate(&state, request).await.unwrap();
 
         check!(result.contains("Workspace Members (1)"));
         check!(result.contains("my-crate"));
@@ -663,14 +660,14 @@ mod tests {
             root_crate: Some("my-crate".to_string()),
         };
 
-        let context = test_context_with_workspace(workspace_ctx).await;
+        let state = test_state_with_workspace(workspace_ctx).await;
 
         let request = InspectCrateRequest {
             crate_name: Some("nonexistent".to_string()),
             detail_level: DetailLevel::Medium,
         };
 
-        let result = handle_inspect_crate(&context, request).await;
+        let result = handle_inspect_crate(&state, request).await;
         let_assert!(Err(err) = result);
         check!(err.to_string().contains("not found"));
     }

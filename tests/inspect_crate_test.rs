@@ -17,7 +17,7 @@ async fn inspect_crate_summary_lists_local(isolated_workspace: IsolatedWorkspace
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
     check!(result.is_ok(), "Should list all crates: {:?}", result);
 
     let output = result.unwrap();
@@ -37,7 +37,7 @@ async fn inspect_crate_summary_lists_deps(isolated_workspace_with_serde: Isolate
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -59,7 +59,7 @@ async fn inspect_crate_shows_modules(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
     check!(result.is_ok(), "Should inspect rustdoc-mcp: {:?}", result);
 
     let output = result.unwrap();
@@ -95,7 +95,7 @@ async fn inspect_crate_shows_exports(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -116,7 +116,7 @@ async fn inspect_crate_shows_item_counts(isolated_workspace: IsolatedWorkspace) 
         detail_level: DetailLevel::Low,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -142,7 +142,7 @@ async fn inspect_crate_external_dep(isolated_workspace_with_serde: IsolatedWorks
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok(), "Should inspect serde: {:?}", result);
 
     let output = result.unwrap();
@@ -162,7 +162,7 @@ async fn inspect_crate_serde_json(isolated_workspace_with_serde: IsolatedWorkspa
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace_with_serde.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await;
     check!(result.is_ok(), "Should inspect serde_json: {:?}", result);
 
     let output = result.unwrap();
@@ -184,7 +184,7 @@ async fn inspect_crate_nonexistent(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
     // Should fail gracefully with an error
     check!(result.is_err(), "Should fail for nonexistent crate");
 }
@@ -206,7 +206,7 @@ async fn inspect_crate_exports_structure(isolated_workspace: IsolatedWorkspace) 
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.context, request).await;
+    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
