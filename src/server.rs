@@ -1,11 +1,12 @@
 //! MCP server implementation and session state management.
 
+use crate::stdlib::StdlibDocs;
 use crate::tools::inspect_crate::{InspectCrateRequest, handle_inspect_crate};
 use crate::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
 use crate::tools::search::{SearchRequest, handle_search};
 use crate::tools::set_workspace::{format_response, handle_set_workspace};
-use crate::workspace::{WorkspaceContext, auto_detect_workspace};
-use anyhow::anyhow;
+use crate::worker::DocState;
+use crate::workspace::WorkspaceContext;
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -15,146 +16,60 @@ use rmcp::{
 };
 use std::borrow::Cow;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-/// Server context for the MCP server.
+/// Legacy server context for backward compatibility.
 ///
-/// Maintains the current workspace location and cached metadata across tool invocations.
-/// This is intentionally simple - no sessions, no persistence, just in-memory state.
-#[derive(Debug, Default, Clone)]
+/// This wraps DocState to provide the old API that tool handlers expect.
+/// It's a transitional type that will be phased out as tools migrate to DocState.
+#[derive(Debug, Clone)]
 pub struct ServerContext {
-    /// Current working directory (workspace root)
-    working_directory: Option<PathBuf>,
-
-    /// Cached workspace context from cargo
-    workspace_context: Option<WorkspaceContext>,
-
-    /// Path to Cargo.lock file (for dependency fingerprinting)
-    cargo_lock_path: Option<PathBuf>,
+    /// Reference to the shared DocState
+    state: Arc<DocState>,
 }
 
 impl ServerContext {
-    /// Create a new server context
-    pub fn new() -> Self {
-        Self::default()
+    /// Create a new server context wrapping DocState.
+    pub fn new(state: Arc<DocState>) -> Self {
+        Self { state }
     }
 
-    /// Get the current working directory
-    pub fn working_directory(&self) -> Option<&PathBuf> {
-        self.working_directory.as_ref()
+    /// Get the underlying DocState.
+    pub fn doc_state(&self) -> &Arc<DocState> {
+        &self.state
     }
 
-    /// Set the working directory and clear cached data
-    pub fn set_working_directory(&mut self, path: PathBuf) -> anyhow::Result<()> {
-        // Validate the path exists
-        if !path.exists() {
-            return Err(anyhow!("Path does not exist: {}", path.display()));
-        }
-
-        if !path.is_dir() {
-            return Err(anyhow!("Path is not a directory: {}", path.display()));
-        }
-
-        // Look for Cargo.lock in the directory
-        let lock_path = path.join("Cargo.lock");
-        self.cargo_lock_path = if lock_path.exists() {
-            Some(lock_path)
-        } else {
-            None
-        };
-
-        // Clear cached workspace context when directory changes
-        self.workspace_context = None;
-        self.working_directory = Some(path);
-
-        Ok(())
+    /// Get the current working directory (blocking).
+    pub fn working_directory(&self) -> Option<PathBuf> {
+        // Use block_in_place for sync access from async context
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.state.working_directory())
+        })
     }
 
-    /// Get the Cargo.lock path if available
-    pub fn cargo_lock_path(&self) -> Option<&PathBuf> {
-        self.cargo_lock_path.as_ref()
+    /// Get cached workspace context (blocking).
+    pub fn workspace_context(&self) -> Option<WorkspaceContext> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.state.workspace())
+        })
     }
 
-    /// Get cached workspace context, if available
-    pub fn workspace_context(&self) -> Option<&WorkspaceContext> {
-        self.workspace_context.as_ref()
+    /// Get the Cargo.lock path (blocking).
+    pub fn cargo_lock_path(&self) -> Option<PathBuf> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.state.cargo_lock_path())
+        })
     }
 
-    /// Set workspace context (typically called after running cargo metadata)
-    pub fn set_workspace_context(&mut self, context: WorkspaceContext) {
-        self.workspace_context = Some(context);
+    /// Get the stdlib documentation provider.
+    pub fn stdlib(&self) -> Option<&Arc<StdlibDocs>> {
+        self.state.stdlib()
     }
 
-    /// Resolve a path relative to the workspace root.
-    ///
-    /// Supports tilde expansion and validates that resolved paths stay within
-    /// the workspace boundaries to prevent path traversal attacks.
-    ///
-    /// # Security
-    /// Canonicalizes the path first (resolving symlinks and normalizing), then validates
-    /// that the canonical path is within workspace boundaries. This prevents symlink-based
-    /// escapes and path traversal attacks.
-    pub fn resolve_workspace_path(&self, path: &str) -> anyhow::Result<PathBuf> {
-        let path_buf = PathBuf::from(&*expand_tilde(path));
-
-        // Resolve to absolute path first
-        let resolved = if path_buf.is_absolute() {
-            path_buf
-        } else {
-            match &self.working_directory {
-                Some(wd) => wd.join(path_buf),
-                None => {
-                    return Err(anyhow!(
-                        "Workspace not configured. Use set_workspace tool first."
-                    ));
-                }
-            }
-        };
-
-        // Canonicalize first (resolve symlinks, make absolute, normalize)
-        let canonical = std::fs::canonicalize(&resolved).map_err(|e| {
-            anyhow!(
-                "Failed to resolve path '{}': {} (path may not exist or is inaccessible)",
-                resolved.display(),
-                e
-            )
-        })?;
-
-        // Validate after canonicalization to catch symlink escapes
-        if let Some(wd) = &self.working_directory {
-            let canonical_wd = std::fs::canonicalize(wd)
-                .map_err(|e| anyhow!("Failed to canonicalize workspace directory: {}", e))?;
-
-            if !canonical.starts_with(&canonical_wd) {
-                return Err(anyhow!(
-                    "Path '{}' is outside workspace boundaries",
-                    canonical.display()
-                ));
-            }
-        }
-
-        Ok(canonical)
+    /// Check if stdlib is available.
+    pub fn has_stdlib(&self) -> bool {
+        self.state.stdlib().is_some()
     }
-}
-
-/// Expands tilde (`~`) in a path to the user's home directory.
-///
-/// - `~/foo` becomes `/home/user/foo`
-/// - `~` becomes `/home/user`
-/// - Other paths are returned unchanged
-///
-/// Returns `Cow::Borrowed` if no expansion needed, `Cow::Owned` if expanded.
-fn expand_tilde(path: &str) -> Cow<'_, str> {
-    if let Some(stripped) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return Cow::Owned(home.join(stripped).display().to_string());
-        }
-    } else if path == "~"
-        && let Some(home) = dirs::home_dir()
-    {
-        return Cow::Owned(home.display().to_string());
-    }
-    Cow::Borrowed(path)
 }
 
 /// Parameters for set_workspace tool
@@ -167,32 +82,39 @@ pub struct SetWorkspaceRequest {
 /// MCP Server for Rust documentation queries
 #[derive(Clone)]
 pub struct ItemServer {
-    /// Server context (working directory, workspace info)
-    context: Arc<Mutex<ServerContext>>,
+    /// Shared documentation state (cache, workspace, stdlib)
+    state: Arc<DocState>,
 
     /// Tool router for handling MCP tool calls
     tool_router: ToolRouter<Self>,
 }
 
-impl Default for ItemServer {
-    fn default() -> Self {
-        Self::new()
+impl std::fmt::Debug for ItemServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ItemServer")
+            .field("state", &self.state)
+            .finish()
     }
 }
 
 #[tool_router]
 impl ItemServer {
-    /// Create a new ItemServer instance
-    pub fn new() -> Self {
+    /// Create a new ItemServer with optional stdlib support.
+    pub fn new(stdlib: Option<Arc<StdlibDocs>>) -> Self {
         Self {
-            context: Arc::new(Mutex::new(ServerContext::new())),
+            state: Arc::new(DocState::new(stdlib)),
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Get a clone of the server context for background tasks
-    pub fn context(&self) -> Arc<Mutex<ServerContext>> {
-        self.context.clone()
+    /// Get a reference to the shared DocState.
+    pub fn doc_state(&self) -> &Arc<DocState> {
+        &self.state
+    }
+
+    /// Get a ServerContext wrapper for legacy tool handler compatibility.
+    pub fn server_context(&self) -> ServerContext {
+        ServerContext::new(self.state.clone())
     }
 
     #[tool(
@@ -203,13 +125,7 @@ impl ItemServer {
         Parameters(SetWorkspaceRequest { path }): Parameters<SetWorkspaceRequest>,
     ) -> std::result::Result<String, String> {
         // Get current workspace before changing it
-        let old_workspace = {
-            let state = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
-                std::process::abort();
-            });
-            state.working_directory().cloned()
-        };
+        let old_workspace = self.state.working_directory().await;
 
         // Execute the logic, passing current workspace for change detection
         let (canonical_path, workspace_info, changed) =
@@ -217,17 +133,22 @@ impl ItemServer {
                 .await
                 .map_err(|e| format!("Failed to set workspace: {}", e))?;
 
-        // Update context
-        {
-            let mut state = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
-                std::process::abort();
-            });
-            state
-                .set_working_directory(canonical_path.clone())
-                .map_err(|e| format!("Failed to update context: {}", e))?;
-            state.set_workspace_context(workspace_info.clone());
+        // Update state
+        let cargo_lock = canonical_path.join("Cargo.lock");
+        let cargo_lock = if cargo_lock.exists() {
+            Some(cargo_lock)
+        } else {
+            None
+        };
+
+        // Clear cache when workspace changes
+        if changed {
+            self.state.clear_cache().await;
         }
+
+        self.state
+            .set_workspace(canonical_path.clone(), workspace_info.clone(), cargo_lock)
+            .await;
 
         // Format response with old workspace and changed flag
         let response = format_response(
@@ -248,17 +169,8 @@ impl ItemServer {
         &self,
         Parameters(request): Parameters<InspectCrateRequest>,
     ) -> std::result::Result<String, String> {
-        // Clone context to avoid holding lock across await
-        let state = {
-            let guard = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
-                std::process::abort();
-            });
-            guard.clone()
-        };
-
-        // Execute the logic
-        handle_inspect_crate(&state, request)
+        let context = self.server_context();
+        handle_inspect_crate(&context, request)
             .await
             .map_err(|e| e.to_string())
     }
@@ -271,17 +183,8 @@ impl ItemServer {
         &self,
         Parameters(request): Parameters<InspectItemRequest>,
     ) -> std::result::Result<String, String> {
-        // Clone context to avoid holding lock across await
-        let state = {
-            let guard = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
-                std::process::abort();
-            });
-            guard.clone()
-        };
-
-        // Execute the logic
-        handle_inspect_item(&state, request)
+        let context = self.server_context();
+        handle_inspect_item(&context, request)
             .await
             .map_err(|e| e.to_string())
     }
@@ -294,17 +197,8 @@ impl ItemServer {
         &self,
         Parameters(request): Parameters<SearchRequest>,
     ) -> std::result::Result<String, String> {
-        // Clone context to avoid holding lock across await
-        let state = {
-            let guard = self.context.lock().unwrap_or_else(|_poisoned| {
-                tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
-                std::process::abort();
-            });
-            guard.clone()
-        };
-
-        // Execute the logic
-        handle_search(&state, request)
+        let context = self.server_context();
+        handle_search(&context, request)
             .await
             .map_err(|e| e.to_string())
     }
@@ -320,57 +214,34 @@ impl ServerHandler for ItemServer {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "rustdoc-mcp: A focused Rust documentation server with beautiful syntax formatting. Automatically detects workspace on startup. Use set_workspace to override if needed."
+                "rustdoc-mcp: A focused Rust documentation server with beautiful syntax formatting. \
+                 Automatically detects workspace and generates documentation on startup. \
+                 Standard library (std, core, alloc) is always available if rust-docs-json is installed. \
+                 Use set_workspace to override automatic detection if needed."
                     .to_string(),
             ),
         }
     }
 }
 
-/// Spawn background task for automatic workspace detection
-pub async fn spawn_workspace_detection(context: Arc<Mutex<ServerContext>>) {
-    tokio::spawn(async move {
-        if let Some(workspace_path) = auto_detect_workspace().await {
-            tracing::debug!("Attempting to configure auto-detected workspace");
-
-            // Attempt to configure the workspace using the existing validation logic
-            // Pass None for current workspace since this is initial auto-detection
-            match handle_set_workspace(workspace_path.display().to_string(), None).await {
-                Ok((canonical_path, workspace_info, _changed)) => {
-                    // Update context with auto-detected workspace
-                    let mut state = context.lock().unwrap_or_else(|_poisoned| {
-                        tracing::error!("rustdoc-mcp: Context state corrupted, aborting");
-                        std::process::abort();
-                    });
-
-                    if let Err(e) = state.set_working_directory(canonical_path.clone()) {
-                        tracing::warn!(
-                            "Auto-detected workspace but failed to set working directory: {}",
-                            e
-                        );
-                        return;
-                    }
-
-                    state.set_workspace_context(workspace_info.clone());
-
-                    tracing::info!(
-                        "✓ Auto-detected and configured workspace: {} ({} members, {} total crates)",
-                        canonical_path.display(),
-                        workspace_info.members.len(),
-                        workspace_info.crate_info.len()
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Auto-detection found Cargo.toml but validation failed: {}",
-                        e
-                    );
-                }
-            }
-        } else {
-            tracing::debug!("No workspace auto-detected, waiting for explicit set_workspace call");
+/// Expands tilde (`~`) in a path to the user's home directory.
+///
+/// - `~/foo` becomes `/home/user/foo`
+/// - `~` becomes `/home/user`
+/// - Other paths are returned unchanged
+///
+/// Returns `Cow::Borrowed` if no expansion needed, `Cow::Owned` if expanded.
+pub fn expand_tilde(path: &str) -> Cow<'_, str> {
+    if let Some(stripped) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return Cow::Owned(home.join(stripped).display().to_string());
         }
-    });
+    } else if path == "~"
+        && let Some(home) = dirs::home_dir()
+    {
+        return Cow::Owned(home.display().to_string());
+    }
+    Cow::Borrowed(path)
 }
 
 /// Generate an inline JSON schema for MCP tools

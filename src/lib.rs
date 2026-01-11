@@ -4,7 +4,9 @@ pub mod format;
 pub mod item;
 pub mod search;
 pub mod server;
+pub mod stdlib;
 pub mod tools;
+pub mod worker;
 pub mod workspace;
 
 pub use cache::Hash;
@@ -16,4 +18,6 @@ pub use search::{
     expand_tilde,
 };
 pub use server::{ItemServer, ServerContext, inline_schema_for_type};
+pub use stdlib::StdlibDocs;
+pub use worker::{BackgroundWorker, DocState, spawn_background_worker};
 pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};

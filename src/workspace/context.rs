@@ -78,9 +78,12 @@ impl WorkspaceContext {
         self.crate_info.get(name).and_then(|m| m.version.as_deref())
     }
 
-    /// Get an iterator over dependency names.
+    /// Get an iterator over dependency names (excludes workspace members).
     pub fn dependency_names(&self) -> impl Iterator<Item = &str> {
-        self.crate_info.keys().map(|s| s.as_str())
+        self.crate_info
+            .keys()
+            .filter(|name| !self.members.contains(name))
+            .map(|s| s.as_str())
     }
 
     /// Get metadata for a specific crate by name.
@@ -104,5 +107,40 @@ impl WorkspaceContext {
                 None => true, // Include all for workspace view
             }
         })
+    }
+
+    /// Get crates sorted by priority for documentation generation.
+    ///
+    /// Priority order:
+    /// 1. Root crate (user's own code, most likely to be queried first)
+    /// 2. Direct dependencies sorted by usage count (most-used first)
+    /// 3. Dev dependencies (lower priority)
+    /// 4. Transitive dependencies (rarely queried directly)
+    pub fn prioritized_crates(&self) -> Vec<String> {
+        let mut crates: Vec<_> = self
+            .crate_info
+            .values()
+            .filter(|c| c.origin != CrateOrigin::Standard) // Skip stdlib
+            .collect();
+
+        crates.sort_by(|a, b| {
+            // Root crate first
+            b.is_root_crate
+                .cmp(&a.is_root_crate)
+                // Then workspace members
+                .then_with(|| {
+                    let a_local = a.origin == CrateOrigin::Local;
+                    let b_local = b.origin == CrateOrigin::Local;
+                    b_local.cmp(&a_local)
+                })
+                // Then by usage count (most-used first)
+                .then_with(|| b.used_by.len().cmp(&a.used_by.len()))
+                // Non-dev deps before dev deps
+                .then_with(|| a.dev_dep.cmp(&b.dev_dep))
+                // Finally alphabetical for stability
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        crates.into_iter().map(|c| c.name.clone()).collect()
     }
 }

@@ -27,18 +27,15 @@ pub fn format_type_with_detail_level(
 ///
 /// DO NOT add doc comments to individual variants - this causes schemars to generate
 /// `oneOf` schemas instead of simple `enum` arrays, breaking MCP client enum handling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum DetailLevel {
     Low,
+    #[default]
     Medium,
     High,
-}
-
-impl Default for DetailLevel {
-    fn default() -> Self {
-        Self::Medium
-    }
 }
 
 /// Filter for controlling which items to display.

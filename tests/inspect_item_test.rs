@@ -1,70 +1,28 @@
+mod common;
+
 use assert2::{check, let_assert};
-use rstest::{fixture, rstest};
+use common::{IsolatedWorkspace, isolated_workspace, isolated_workspace_with_serde};
+use rstest::rstest;
 use rustdoc_mcp::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
-use rustdoc_mcp::{
-    CrateMetadata, CrateOrigin, DetailLevel, ItemKind, ServerContext, WorkspaceContext,
-};
-use serial_test::serial;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use rustdoc_mcp::{DetailLevel, ItemKind};
 
-#[fixture]
-fn test_context() -> ServerContext {
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+// --- TDD Tests: External Dependencies (serde, serde_json) ---
+// These tests fail because serde.json only contains re-exports to serde_core.
+// The actual Serialize/Deserialize traits are defined in serde_core.json.
+// Cross-crate re-export following is not yet implemented.
 
-    let mut context = ServerContext::new();
-    context
-        .set_working_directory(project_root.clone())
-        .expect("Failed to set working directory");
-
-    let mut crate_info = HashMap::new();
-    crate_info.insert(
-        "serde".to_string(),
-        CrateMetadata {
-            origin: CrateOrigin::External,
-            version: Some("1.0".to_string()),
-            description: None,
-            dev_dep: false,
-            name: "serde".to_string(),
-            is_root_crate: false,
-            used_by: vec![],
-        },
-    );
-    crate_info.insert(
-        "serde_json".to_string(),
-        CrateMetadata {
-            origin: CrateOrigin::External,
-            version: Some("1.0".to_string()),
-            description: None,
-            dev_dep: false,
-            name: "serde_json".to_string(),
-            is_root_crate: false,
-            used_by: vec![],
-        },
-    );
-
-    let metadata = WorkspaceContext {
-        root: project_root,
-        members: vec!["rustdoc-mcp".to_string()],
-        crate_info,
-        root_crate: Some("rustdoc-mcp".to_string()),
-    };
-    context.set_workspace_context(metadata);
-
-    context
-}
-
+/// Test: Find Serialize trait via serde::Serialize.
+/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn inspect_finds_serialize_trait(test_context: ServerContext) {
+async fn inspect_finds_serialize_trait(isolated_workspace_with_serde: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "serde::Serialize".to_string(),
         kind: Some(ItemKind::Trait),
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&test_context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -72,17 +30,18 @@ async fn inspect_finds_serialize_trait(test_context: ServerContext) {
     check!(output.contains("trait"));
 }
 
+/// Test: Find Deserialize trait via simple lookup.
+/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn inspect_successful_simple_lookup(test_context: ServerContext) {
+async fn inspect_successful_simple_lookup(isolated_workspace_with_serde: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "serde::Deserialize".to_string(),
         kind: Some(ItemKind::Trait),
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&test_context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -90,17 +49,18 @@ async fn inspect_successful_simple_lookup(test_context: ServerContext) {
     check!(output.contains("trait"));
 }
 
+/// Test: Find Serialize trait via qualified path.
+/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn inspect_successful_qualified_path(test_context: ServerContext) {
+async fn inspect_successful_qualified_path(isolated_workspace_with_serde: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "serde::Serialize".to_string(),
         kind: Some(ItemKind::Trait),
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&test_context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -110,31 +70,31 @@ async fn inspect_successful_qualified_path(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn inspect_no_matches_found(test_context: ServerContext) {
+async fn inspect_no_matches_found(isolated_workspace: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "NonExistentItemXYZ123".to_string(),
         kind: None,
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&test_context, request).await;
+    let result = handle_inspect_item(&isolated_workspace.context, request).await;
     let_assert!(Err(err) = result);
     check!(err.contains("No items found matching"));
     check!(err.contains("NonExistentItemXYZ123"));
 }
 
+/// Test: Inspect with minimal verbosity.
+/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn inspect_minimal_verbosity(test_context: ServerContext) {
+async fn inspect_minimal_verbosity(isolated_workspace_with_serde: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "serde::Deserialize".to_string(),
         kind: Some(ItemKind::Trait),
         detail_level: DetailLevel::Low,
     };
 
-    let result = handle_inspect_item(&test_context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -143,17 +103,18 @@ async fn inspect_minimal_verbosity(test_context: ServerContext) {
     check!(output.lines().count() < 20);
 }
 
+/// Test: Inspect with full verbosity.
+/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn inspect_full_verbosity(test_context: ServerContext) {
+async fn inspect_full_verbosity(isolated_workspace_with_serde: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "serde::Deserialize".to_string(),
         kind: Some(ItemKind::Trait),
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_item(&test_context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -165,15 +126,14 @@ async fn inspect_full_verbosity(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn inspect_function_lookup(test_context: ServerContext) {
+async fn inspect_function_lookup(isolated_workspace_with_serde: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "serde_json::to_string".to_string(),
         kind: Some(ItemKind::Function),
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_item(&test_context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
@@ -183,19 +143,156 @@ async fn inspect_function_lookup(test_context: ServerContext) {
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-#[serial]
-async fn inspect_enum_with_variants(test_context: ServerContext) {
+async fn inspect_enum_with_variants(isolated_workspace_with_serde: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "serde_json::Value".to_string(),
         kind: Some(ItemKind::Enum),
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_item(&test_context, request).await;
+    let result = handle_inspect_item(&isolated_workspace_with_serde.context, request).await;
     check!(result.is_ok());
 
     let output = result.unwrap();
     check!(output.contains("Value"));
     check!(output.contains("enum"));
     check!(output.contains("Null") || output.contains("Bool") || output.contains("Number"));
+}
+
+// --- TDD Tests: Local Crate (expected to FAIL) ---
+// Tests for local crate item lookup. These document known bugs.
+
+/// Test: Find a local struct by simple name.
+/// BUG: This may succeed but return a malformed path like
+/// "rustdoc-mcp::rustdoc_mcp::search::query::QueryContext"
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_local_struct_simple_name(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "QueryContext".to_string(),
+        kind: Some(ItemKind::Struct),
+        detail_level: DetailLevel::Medium,
+    };
+
+    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    check!(result.is_ok(), "Should find QueryContext by simple name");
+
+    let output = result.unwrap();
+    check!(output.contains("QueryContext"));
+    check!(output.contains("struct"));
+
+    // The path should NOT have a doubled crate name
+    check!(
+        !output.contains("rustdoc-mcp::rustdoc_mcp"),
+        "Path should not have doubled crate name prefix"
+    );
+}
+
+/// Test: Find a local struct by full qualified path.
+/// BUG: Full path queries for local crate items fail to resolve.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_local_struct_full_path(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "rustdoc_mcp::search::query::QueryContext".to_string(),
+        kind: Some(ItemKind::Struct),
+        detail_level: DetailLevel::Medium,
+    };
+
+    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    check!(
+        result.is_ok(),
+        "Should find QueryContext by full path: {:?}",
+        result
+    );
+
+    let output = result.unwrap();
+    check!(output.contains("QueryContext"));
+    check!(output.contains("struct"));
+}
+
+/// Test: Find a local module by name.
+/// BUG: Module lookups for local crate fail.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_local_module(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "workspace".to_string(),
+        kind: Some(ItemKind::Module),
+        detail_level: DetailLevel::Medium,
+    };
+
+    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    check!(result.is_ok(), "Should find workspace module: {:?}", result);
+
+    let output = result.unwrap();
+    check!(output.contains("workspace"));
+}
+
+/// Test: Find the only trait in the local crate.
+/// BUG: TypeFormatter trait is not found.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_local_trait(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "TypeFormatter".to_string(),
+        kind: Some(ItemKind::Trait),
+        detail_level: DetailLevel::Medium,
+    };
+
+    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    check!(
+        result.is_ok(),
+        "Should find TypeFormatter trait: {:?}",
+        result
+    );
+
+    let output = result.unwrap();
+    check!(output.contains("TypeFormatter"));
+    check!(output.contains("trait"));
+}
+
+/// Test: Find BackgroundWorker struct which is a public export.
+/// BUG: Even though it's listed in exports, it's not found.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_local_backgroundworker(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "BackgroundWorker".to_string(),
+        kind: Some(ItemKind::Struct),
+        detail_level: DetailLevel::Medium,
+    };
+
+    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    check!(
+        result.is_ok(),
+        "Should find BackgroundWorker struct: {:?}",
+        result
+    );
+
+    let output = result.unwrap();
+    check!(output.contains("BackgroundWorker"));
+    check!(output.contains("struct"));
+}
+
+/// Test: Find ServerContext with full path using hyphenated crate name.
+/// This tests if the crate name normalization works correctly.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_local_with_hyphenated_crate_name(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "rustdoc-mcp::ServerContext".to_string(),
+        kind: Some(ItemKind::Struct),
+        detail_level: DetailLevel::Medium,
+    };
+
+    let result = handle_inspect_item(&isolated_workspace.context, request).await;
+    check!(
+        result.is_ok(),
+        "Should find ServerContext with hyphenated crate name: {:?}",
+        result
+    );
+
+    let output = result.unwrap();
+    check!(output.contains("ServerContext"));
 }

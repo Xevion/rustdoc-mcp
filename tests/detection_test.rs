@@ -1,84 +1,15 @@
+mod common;
+
+use common::TempWorkspace;
 use rustdoc_mcp::workspace::{
     find_cargo_toml_with_constraints, find_git_root, find_workspace_root, has_workspace_section,
     is_boundary_directory, is_system_directory,
 };
-use std::fs;
 use std::path::Path;
-use tempfile::TempDir;
-
-/// Helper to create a temporary directory structure for testing
-struct TestWorkspace {
-    _temp: TempDir,
-    root: std::path::PathBuf,
-}
-
-impl TestWorkspace {
-    fn new() -> Self {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path().to_path_buf();
-        Self { _temp: temp, root }
-    }
-
-    fn path(&self) -> &Path {
-        &self.root
-    }
-
-    fn create_dir(&self, path: &str) {
-        let full_path = self.root.join(path);
-        fs::create_dir_all(&full_path).unwrap();
-    }
-
-    fn create_file(&self, path: &str, content: &str) {
-        let full_path = self.root.join(path);
-        if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(&full_path, content).unwrap();
-    }
-
-    fn create_cargo_toml(&self, path: &str, is_workspace: bool) {
-        let content = if is_workspace {
-            r#"
-[workspace]
-members = ["member1", "member2"]
-
-[workspace.package]
-version = "0.1.0"
-edition = "2021"
-"#
-        } else {
-            r#"
-[package]
-name = "test-package"
-version = "0.1.0"
-edition = "2021"
-"#
-        };
-        self.create_file(path, content);
-    }
-
-    fn create_git_repo(&self, path: &str) {
-        let git_path = self.root.join(path).join(".git");
-        fs::create_dir_all(&git_path).unwrap();
-        // Create a minimal .git directory structure
-        fs::create_dir_all(git_path.join("refs")).unwrap();
-        fs::create_dir_all(git_path.join("objects")).unwrap();
-        fs::write(git_path.join("HEAD"), "ref: refs/heads/main").unwrap();
-    }
-
-    fn create_git_submodule(&self, path: &str) {
-        // In a submodule, .git is a file pointing to the parent repo
-        let git_file = self.root.join(path).join(".git");
-        if let Some(parent) = git_file.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(&git_file, "gitdir: ../.git/modules/submodule").unwrap();
-    }
-}
 
 #[test]
 fn test_find_cargo_toml_in_current_directory() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", false);
 
     let result = find_cargo_toml_with_constraints(workspace.path());
@@ -88,7 +19,7 @@ fn test_find_cargo_toml_in_current_directory() {
 
 #[test]
 fn test_find_cargo_toml_one_directory_up() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", false);
     workspace.create_dir("subdir");
 
@@ -99,7 +30,7 @@ fn test_find_cargo_toml_one_directory_up() {
 
 #[test]
 fn test_find_cargo_toml_two_directories_up_no_git() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", false);
     workspace.create_dir("dir1/dir2");
 
@@ -110,7 +41,7 @@ fn test_find_cargo_toml_two_directories_up_no_git() {
 
 #[test]
 fn test_stop_after_two_directories_no_git() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", false);
     workspace.create_dir("dir1/dir2/dir3");
 
@@ -121,7 +52,7 @@ fn test_stop_after_two_directories_no_git() {
 
 #[test]
 fn test_unlimited_depth_in_git_repo() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_git_repo(".");
     workspace.create_cargo_toml("Cargo.toml", false);
     workspace.create_dir("dir1/dir2/dir3/dir4");
@@ -134,7 +65,7 @@ fn test_unlimited_depth_in_git_repo() {
 
 #[test]
 fn test_stop_at_git_repository_root() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_dir("parent");
     workspace.create_cargo_toml("parent/Cargo.toml", false);
     workspace.create_dir("parent/repo");
@@ -151,7 +82,7 @@ fn test_stop_at_git_repository_root() {
 
 #[test]
 fn test_git_submodule_boundary() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_dir("parent");
     workspace.create_git_repo("parent");
     workspace.create_cargo_toml("parent/Cargo.toml", false);
@@ -169,7 +100,7 @@ fn test_git_submodule_boundary() {
 
 #[test]
 fn test_find_git_root_in_repo() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_git_repo(".");
     workspace.create_dir("deep/nested/path");
 
@@ -180,7 +111,7 @@ fn test_find_git_root_in_repo() {
 
 #[test]
 fn test_find_git_root_not_in_repo() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_dir("no/git/here");
 
     let result = find_git_root(&workspace.path().join("no/git/here"));
@@ -189,7 +120,7 @@ fn test_find_git_root_not_in_repo() {
 
 #[test]
 fn test_find_git_root_with_submodule() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_git_repo(".");
     workspace.create_dir("submodule");
     workspace.create_git_submodule("submodule");
@@ -203,7 +134,7 @@ fn test_find_git_root_with_submodule() {
 
 #[test]
 fn test_has_workspace_section_workspace() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", true);
 
     let result = has_workspace_section(&workspace.path().join("Cargo.toml"));
@@ -212,7 +143,7 @@ fn test_has_workspace_section_workspace() {
 
 #[test]
 fn test_has_workspace_section_package_only() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", false);
 
     let result = has_workspace_section(&workspace.path().join("Cargo.toml"));
@@ -221,7 +152,7 @@ fn test_has_workspace_section_package_only() {
 
 #[test]
 fn test_has_workspace_section_invalid() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_file("Cargo.toml", "invalid toml content {][}");
 
     let result = has_workspace_section(&workspace.path().join("Cargo.toml"));
@@ -230,7 +161,7 @@ fn test_has_workspace_section_invalid() {
 
 #[test]
 fn test_has_workspace_section_nonexistent() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
 
     let result = has_workspace_section(&workspace.path().join("nonexistent.toml"));
     assert_eq!(result, None);
@@ -238,7 +169,7 @@ fn test_has_workspace_section_nonexistent() {
 
 #[test]
 fn test_find_workspace_root_already_workspace() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", true);
 
     let result = find_workspace_root(workspace.path());
@@ -248,7 +179,7 @@ fn test_find_workspace_root_already_workspace() {
 
 #[test]
 fn test_find_workspace_root_from_package() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", true);
     workspace.create_dir("member");
     workspace.create_cargo_toml("member/Cargo.toml", false);
@@ -260,7 +191,7 @@ fn test_find_workspace_root_from_package() {
 
 #[test]
 fn test_find_workspace_root_nested_packages() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", true);
     workspace.create_dir("member1");
     workspace.create_cargo_toml("member1/Cargo.toml", false);
@@ -275,7 +206,7 @@ fn test_find_workspace_root_nested_packages() {
 
 #[test]
 fn test_find_workspace_root_package_without_workspace() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", false);
 
     // No workspace found, should return the package directory itself
@@ -336,7 +267,7 @@ fn test_is_boundary_directory_user_dirs() {
 
 #[test]
 fn test_no_cargo_toml_found() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_dir("empty/project");
 
     let result = find_cargo_toml_with_constraints(&workspace.path().join("empty/project"));
@@ -345,7 +276,7 @@ fn test_no_cargo_toml_found() {
 
 #[test]
 fn test_cargo_toml_with_invalid_content() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_file("Cargo.toml", "invalid { toml ][");
     workspace.create_dir("subdir");
 
@@ -356,7 +287,7 @@ fn test_cargo_toml_with_invalid_content() {
 
 #[test]
 fn test_multiple_cargo_toml_finds_nearest() {
-    let workspace = TestWorkspace::new();
+    let workspace = TempWorkspace::new();
     workspace.create_cargo_toml("Cargo.toml", true);
     workspace.create_dir("nested");
     workspace.create_cargo_toml("nested/Cargo.toml", false);

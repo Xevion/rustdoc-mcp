@@ -42,9 +42,10 @@ anyhow = "1.0"
 regex = "1.0"
 rstest = "0.26.1"
 dirs = "6.0.0"
+lru = "0.16.3"
+futures = "0.3.31"
 
 [dev-dependencies]
 assert2 = "0.3.16"
 rstest = "0.26.1"
 tempfile = "3.23.0"
-serial_test = "3.3"

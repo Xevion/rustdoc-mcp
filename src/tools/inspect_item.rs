@@ -6,6 +6,7 @@ use crate::search::{
     parse_item_path, resolve_crate_from_path,
 };
 use crate::server::ServerContext;
+use crate::stdlib::StdlibDocs;
 use crate::workspace::get_docs;
 use rmcp::schemars;
 use rustdoc_types::{Item, ItemEnum};
@@ -35,13 +36,51 @@ pub async fn handle_inspect_item(
     context: &ServerContext,
     request: InspectItemRequest,
 ) -> Result<String, String> {
+    // Parse the item path to check if it targets stdlib
+    let path_check = parse_item_path(&request.query);
+
+    // Check if query explicitly targets a stdlib crate
+    let targets_stdlib = path_check
+        .path_components
+        .first()
+        .map(|first| StdlibDocs::is_stdlib_crate(first))
+        .unwrap_or(false);
+
+    // If targeting stdlib and stdlib is available, handle it directly
+    if targets_stdlib && let Some(stdlib) = context.stdlib() {
+        return handle_stdlib_inspect(stdlib, &request).await;
+    }
+
+    // Try workspace-based lookup
+    let workspace_ctx = match context.workspace_context() {
+        Some(ctx) => ctx,
+        None => {
+            // No workspace - try stdlib fallback for common types
+            if let Some(stdlib) = context.stdlib() {
+                // Try to find common types in stdlib (Vec, HashMap, String, etc.)
+                return handle_stdlib_inspect(stdlib, &request).await
+                    .map(|mut result| {
+                        // Add a hint that we're showing stdlib only
+                        let hint = "\n---\nNote: No workspace configured. Showing standard library only.\n\
+                                    Use set_workspace to search additional crates.";
+                        result.push_str(hint);
+                        result
+                    });
+            }
+
+            return Err(
+                "No workspace configured and standard library docs not available.\n\n\
+                 To configure a workspace:\n\
+                 • Use set_workspace with a path to a Rust project\n\n\
+                 To enable standard library docs:\n\
+                 • Run: rustup component add rust-docs-json --toolchain nightly"
+                    .to_string(),
+            );
+        }
+    };
+
     // Parse the item path
     let mut path = parse_item_path(&request.query);
-
-    // Get available crates from workspace context
-    let workspace_ctx = context
-        .workspace_context()
-        .ok_or_else(|| "No workspace configured. Use set_workspace first.".to_string())?;
 
     // Get workspace root directory
     let workspace_root = context
@@ -52,7 +91,7 @@ pub async fn handle_inspect_item(
     let mut known_crates = workspace_ctx.members.clone();
     known_crates.extend(workspace_ctx.dependency_names().map(|s| s.to_string()));
 
-    let cargo_lock_path = context.cargo_lock_path().map(|p| p.as_path());
+    let cargo_lock_path = context.cargo_lock_path();
 
     // Create single QueryContext for the entire request (path resolution, search, and module traversal)
     let query_ctx = QueryContext::new(Arc::new(workspace_ctx.clone()));
@@ -258,9 +297,9 @@ pub async fn handle_inspect_item(
     let doc = get_docs(
         crate_name,
         version,
-        workspace_root,
+        &workspace_root,
         is_workspace_member,
-        cargo_lock_path,
+        cargo_lock_path.as_deref(),
     )
     .await
     .map_err(|e| format!("Failed to load documentation for '{}': {}", crate_name, e))?;
@@ -359,4 +398,131 @@ fn format_item_output(
 
     result?;
     Ok(output)
+}
+
+/// Handle inspect_item for stdlib crates when no workspace is available.
+async fn handle_stdlib_inspect(
+    stdlib: &Arc<crate::stdlib::StdlibDocs>,
+    request: &InspectItemRequest,
+) -> Result<String, String> {
+    let path = parse_item_path(&request.query);
+
+    // Determine which stdlib crate to search
+    let (target_crate, search_name) = if let Some(first) = path.path_components.first() {
+        if StdlibDocs::is_stdlib_crate(first) {
+            // Query is like "std::vec::Vec" - search in specified crate
+            let remaining: Vec<_> = path.path_components.iter().skip(1).cloned().collect();
+            let search = if remaining.is_empty() {
+                first.clone() // Just "std" - return the crate root
+            } else {
+                remaining.last().cloned().unwrap_or_default()
+            };
+            (first.clone(), search)
+        } else {
+            // Query is like "Vec" - search in std first
+            ("std".to_string(), first.clone())
+        }
+    } else {
+        return Err("Empty query".to_string());
+    };
+
+    // Load the stdlib crate
+    let _crate_index = stdlib
+        .load(&target_crate)
+        .await
+        .map_err(|e| format!("Failed to load {} documentation: {}", target_crate, e))?;
+
+    // Build a minimal workspace context for stdlib
+    use crate::workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    let mut crate_info = HashMap::new();
+    crate_info.insert(
+        target_crate.clone(),
+        CrateMetadata {
+            origin: CrateOrigin::Standard,
+            name: target_crate.clone(),
+            version: Some("nightly".to_string()),
+            description: None,
+            dev_dep: false,
+            is_root_crate: false,
+            used_by: vec![],
+        },
+    );
+
+    let stdlib_ctx = WorkspaceContext {
+        root: PathBuf::from("/"),
+        members: vec![],
+        crate_info,
+        root_crate: None,
+    };
+
+    let query_ctx = QueryContext::new(Arc::new(stdlib_ctx));
+
+    // Try path resolution first
+    let full_path = if path.path_components.len() > 1 {
+        path.path_components.join("::")
+    } else {
+        format!("{}::{}", target_crate, search_name)
+    };
+
+    // Path resolution - use a scope to ensure suggestions is dropped before any await
+    let path_result = {
+        let mut suggestions = Vec::new();
+        query_ctx
+            .resolve_path(&full_path, &mut suggestions)
+            .map(|item_ref| {
+                if let Some(kind_filter) = request.kind
+                    && !matches_kind(item_ref.inner(), kind_filter)
+                {
+                    return Err(format!(
+                        "Item '{}' found but is not a {:?}",
+                        request.query, kind_filter
+                    ));
+                }
+                format_item_output(item_ref, request.detail_level, &target_crate)
+            })
+    };
+
+    if let Some(result) = path_result {
+        return result;
+    }
+
+    // Fall back to search
+    let index = TermIndex::load_or_build(&query_ctx, &target_crate)
+        .map_err(|_| format!("Failed to build search index for {}", target_crate))?;
+
+    let results = index.search(&search_name, 10);
+    let available_crates = stdlib.available_crates();
+
+    if results.is_empty() {
+        return Err(format!(
+            "Item '{}' not found in {}.\n\n\
+             Try:\n\
+             • Searching in a different stdlib crate: {}\n\
+             • Using a more specific path like 'std::collections::HashMap'",
+            request.query,
+            target_crate,
+            available_crates.join(", ")
+        ));
+    }
+
+    // Get the best match
+    let best = &results[0];
+    if let Some((item_ref, _path_segments)) =
+        query_ctx.get_item_from_id_path(&best.item.crate_name, &best.item.item_path)
+    {
+        if let Some(kind_filter) = request.kind
+            && !matches_kind(item_ref.inner(), kind_filter)
+        {
+            return Err(format!(
+                "Item '{}' found but is not a {:?}",
+                request.query, kind_filter
+            ));
+        }
+        return format_item_output(item_ref, request.detail_level, &target_crate);
+    }
+
+    Err(format!("Failed to resolve item '{}'", request.query))
 }

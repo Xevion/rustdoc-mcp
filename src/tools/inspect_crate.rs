@@ -1,6 +1,8 @@
 use crate::error::Result;
 use crate::format::DetailLevel;
+use crate::search::CrateIndex;
 use crate::server::ServerContext;
+use crate::stdlib::StdlibDocs;
 use crate::workspace::{CrateOrigin, get_docs};
 use anyhow::anyhow;
 use rmcp::schemars;
@@ -42,14 +44,51 @@ pub async fn handle_inspect_crate(
     context: &ServerContext,
     request: InspectCrateRequest,
 ) -> Result<String> {
-    let workspace_ctx = context
-        .workspace_context()
-        .ok_or_else(|| anyhow!("Workspace not configured. Use set_workspace tool first."))?;
+    // Try workspace first
+    if let Some(workspace_ctx) = context.workspace_context() {
+        return match request.crate_name {
+            None => render_summary_mode(&workspace_ctx, request.detail_level, context).await,
+            Some(crate_name) => {
+                // Check if it's a stdlib crate that we should handle specially
+                if StdlibDocs::is_stdlib_crate(&crate_name)
+                    && let Some(stdlib) = context.stdlib()
+                {
+                    return render_stdlib_detail_mode(&crate_name, stdlib, request.detail_level)
+                        .await;
+                }
+                render_detail_mode(&crate_name, &workspace_ctx, request.detail_level, context).await
+            }
+        };
+    }
+
+    // No workspace - fall back to stdlib if available
+    let stdlib = context.stdlib().ok_or_else(|| {
+        anyhow!(
+            "No workspace configured and standard library docs not available.\n\
+             \n\
+             To configure a workspace:\n\
+             • Use set_workspace with a path to a Rust project\n\
+             \n\
+             To enable standard library docs:\n\
+             • Run: rustup component add rust-docs-json --toolchain nightly"
+        )
+    })?;
 
     match request.crate_name {
-        None => render_summary_mode(workspace_ctx, request.detail_level, context).await,
+        None => render_stdlib_summary_mode(stdlib, request.detail_level).await,
         Some(crate_name) => {
-            render_detail_mode(&crate_name, workspace_ctx, request.detail_level, context).await
+            if !StdlibDocs::is_stdlib_crate(&crate_name) {
+                return Err(anyhow!(
+                    "Crate '{}' not found. No workspace configured.\n\
+                     \n\
+                     Available standard library crates: {}\n\
+                     \n\
+                     Use set_workspace to configure a Rust project for additional crates.",
+                    crate_name,
+                    stdlib.available_crates().join(", ")
+                ));
+            }
+            render_stdlib_detail_mode(&crate_name, stdlib, request.detail_level).await
         }
     }
 }
@@ -188,19 +227,30 @@ async fn render_detail_mode(
         .working_directory()
         .ok_or_else(|| anyhow!("No working directory configured"))?;
 
-    let cargo_lock_path = context.cargo_lock_path().map(|p| p.as_path());
+    // First try loading existing JSON directly (avoids digest validation)
+    let normalized_name = crate_name.replace('-', "_");
+    let doc_path = workspace_root
+        .join("target/doc")
+        .join(format!("{}.json", normalized_name));
 
-    let is_workspace_member = meta.origin == CrateOrigin::Local;
-    let version = meta.version.as_deref();
+    let doc_result = if doc_path.exists() {
+        // JSON exists, load directly without regeneration
+        CrateIndex::load(&doc_path)
+    } else {
+        // JSON doesn't exist, try to generate
+        let cargo_lock_path = context.cargo_lock_path();
+        let is_workspace_member = meta.origin == CrateOrigin::Local;
+        let version = meta.version.as_deref();
 
-    let doc_result = get_docs(
-        crate_name,
-        version,
-        workspace_root,
-        is_workspace_member,
-        cargo_lock_path,
-    )
-    .await;
+        get_docs(
+            crate_name,
+            version,
+            &workspace_root,
+            is_workspace_member,
+            cargo_lock_path.as_deref(),
+        )
+        .await
+    };
 
     match doc_result {
         Ok(crate_index) => {
@@ -355,18 +405,180 @@ fn truncate_description(desc: &str, max_len: usize) -> String {
     }
 }
 
+/// Summary mode for stdlib-only (no workspace configured)
+async fn render_stdlib_summary_mode(
+    stdlib: &std::sync::Arc<StdlibDocs>,
+    _detail_level: DetailLevel,
+) -> Result<String> {
+    let mut output = String::new();
+
+    writeln!(
+        output,
+        "No workspace configured. Showing standard library only."
+    )?;
+    writeln!(output)?;
+    writeln!(
+        output,
+        "Standard Library Crates ({}):",
+        stdlib.rustc_version()
+    )?;
+
+    for crate_name in stdlib.available_crates() {
+        let description = match crate_name {
+            "std" => "The Rust Standard Library",
+            "core" => "The Rust Core Library (no_std compatible)",
+            "alloc" => "Memory allocation APIs (no_std compatible)",
+            "proc_macro" => "Procedural macro support",
+            "test" => "Testing framework internals",
+            _ => "",
+        };
+
+        if description.is_empty() {
+            writeln!(output, "  • {}", crate_name)?;
+        } else {
+            writeln!(output, "  • {} - {}", crate_name, description)?;
+        }
+    }
+
+    writeln!(output)?;
+    writeln!(
+        output,
+        "Hint: Use set_workspace to configure a Rust project for additional crates."
+    )?;
+
+    Ok(output)
+}
+
+/// Detail mode for a stdlib crate
+async fn render_stdlib_detail_mode(
+    crate_name: &str,
+    stdlib: &std::sync::Arc<StdlibDocs>,
+    detail_level: DetailLevel,
+) -> Result<String> {
+    let mut output = String::new();
+
+    // Load the crate documentation
+    let crate_index = stdlib.load(crate_name).await?;
+
+    // Header
+    let (name, version) = crate_index.crate_info();
+    let name = name.unwrap_or(crate_name);
+    let version = version.unwrap_or("nightly");
+
+    writeln!(output, "Crate: {} v{}", name, version)?;
+    writeln!(output, "Origin: Standard Library")?;
+
+    // Item counts
+    let counts = count_items_by_kind(&crate_index);
+    writeln!(output, "\nItem Counts:")?;
+    for (kind, count) in &counts {
+        writeln!(output, "  {}: {}", kind, count)?;
+    }
+
+    // Module hierarchy (medium and high detail)
+    if detail_level != DetailLevel::Low
+        && let Some(root) = crate_index.root_module()
+        && let ItemEnum::Module(module) = &root.inner
+    {
+        writeln!(output, "\nTop-level Modules:")?;
+        let mut module_names: Vec<_> = module
+            .items
+            .iter()
+            .filter_map(|id| {
+                let item = crate_index.get_item(id)?;
+                if matches!(item.inner, ItemEnum::Module(_)) {
+                    item.name.as_ref()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        module_names.sort();
+
+        let limit = if detail_level == DetailLevel::High {
+            module_names.len()
+        } else {
+            10
+        };
+
+        for name in module_names.iter().take(limit) {
+            writeln!(output, "  • {}", name)?;
+        }
+
+        if module_names.len() > limit {
+            writeln!(
+                output,
+                "  ... and {} more modules",
+                module_names.len() - limit
+            )?;
+        }
+    }
+
+    // Top exports (high detail only)
+    if detail_level == DetailLevel::High {
+        writeln!(output, "\nCommon Exports:")?;
+
+        let types = crate_index.public_types();
+        if !types.is_empty() {
+            writeln!(output, "  Types:")?;
+            for item in types.iter().take(5) {
+                if item.name.is_some() {
+                    let path = crate_index.get_item_path(item);
+                    writeln!(output, "    • {}", path)?;
+                }
+            }
+            if types.len() > 5 {
+                writeln!(output, "    ... and {} more types", types.len() - 5)?;
+            }
+        }
+
+        let traits = crate_index.public_traits();
+        if !traits.is_empty() {
+            writeln!(output, "  Traits:")?;
+            for item in traits.iter().take(5) {
+                if item.name.is_some() {
+                    let path = crate_index.get_item_path(item);
+                    writeln!(output, "    • {}", path)?;
+                }
+            }
+            if traits.len() > 5 {
+                writeln!(output, "    ... and {} more traits", traits.len() - 5)?;
+            }
+        }
+    }
+
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::server::ServerContext;
+    use crate::worker::DocState;
     use crate::workspace::{CrateMetadata, WorkspaceContext};
     use assert2::{check, let_assert};
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
-    #[tokio::test]
+    /// Create a test ServerContext with no workspace configured.
+    fn test_context() -> ServerContext {
+        let state = Arc::new(DocState::new(None));
+        ServerContext::new(state)
+    }
+
+    /// Create a test ServerContext with the given workspace.
+    async fn test_context_with_workspace(workspace: WorkspaceContext) -> ServerContext {
+        let state = Arc::new(DocState::new(None));
+        state
+            .set_workspace(workspace.root.clone(), workspace, None)
+            .await;
+        ServerContext::new(state)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_inspect_crate_no_workspace() {
-        let context = ServerContext::new();
+        let context = test_context();
         let request = InspectCrateRequest {
             crate_name: None,
             detail_level: DetailLevel::Medium,
@@ -374,13 +586,12 @@ mod tests {
 
         let result = handle_inspect_crate(&context, request).await;
         let_assert!(Err(err) = result);
-        check!(err.to_string().contains("Workspace not configured"));
+        // Error should mention both workspace and stdlib not being available
+        check!(err.to_string().contains("No workspace configured"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_inspect_crate_summary_mode() {
-        let mut context = ServerContext::new();
-
         let mut crate_info = HashMap::new();
         crate_info.insert(
             "my-crate".to_string(),
@@ -426,7 +637,7 @@ mod tests {
             root_crate: Some("my-crate".to_string()),
         };
 
-        context.set_workspace_context(workspace_ctx);
+        let context = test_context_with_workspace(workspace_ctx).await;
 
         let request = InspectCrateRequest {
             crate_name: None,
@@ -443,10 +654,8 @@ mod tests {
         check!(result.contains("Serialization framework"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_inspect_crate_detail_mode_not_found() {
-        let mut context = ServerContext::new();
-
         let workspace_ctx = WorkspaceContext {
             root: PathBuf::from("/test/project"),
             members: vec!["my-crate".to_string()],
@@ -454,7 +663,7 @@ mod tests {
             root_crate: Some("my-crate".to_string()),
         };
 
-        context.set_workspace_context(workspace_ctx);
+        let context = test_context_with_workspace(workspace_ctx).await;
 
         let request = InspectCrateRequest {
             crate_name: Some("nonexistent".to_string()),

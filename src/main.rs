@@ -1,5 +1,8 @@
 use rmcp::{ServiceExt, transport::stdio};
-use rustdoc_mcp::server::{ItemServer, spawn_workspace_detection};
+use rustdoc_mcp::server::ItemServer;
+use rustdoc_mcp::stdlib::StdlibDocs;
+use rustdoc_mcp::worker::spawn_background_worker;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -13,11 +16,31 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting rustdoc-mcp MCP server");
 
-    // Create the MCP server
-    let server = ItemServer::new();
+    // Discover stdlib documentation (optional - server works without it)
+    let stdlib = match StdlibDocs::discover() {
+        Ok(stdlib) => {
+            tracing::info!(
+                "Standard library docs available ({})",
+                stdlib.rustc_version()
+            );
+            Some(Arc::new(stdlib))
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Standard library docs not available: {}. \
+                 Install with: rustup component add rust-docs-json --toolchain nightly",
+                e
+            );
+            None
+        }
+    };
 
-    // Spawn background task for workspace auto-detection
-    spawn_workspace_detection(server.context()).await;
+    // Create the MCP server with stdlib support
+    let server = ItemServer::new(stdlib);
+
+    // Spawn background worker for continuous workspace detection and doc generation
+    let _worker_handle = spawn_background_worker(server.doc_state().clone());
+    tracing::debug!("Background worker spawned");
 
     let service = server.serve(stdio()).await.inspect_err(|e| {
         tracing::error!("Error serving MCP server: {:?}", e);
