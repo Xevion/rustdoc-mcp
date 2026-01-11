@@ -2,6 +2,7 @@ use crate::error::Result;
 use crate::format::DetailLevel;
 use crate::search::CrateIndex;
 use crate::stdlib::StdlibDocs;
+use crate::types::CrateName;
 use crate::worker::DocState;
 use crate::workspace::{CrateOrigin, get_docs};
 use anyhow::anyhow;
@@ -158,7 +159,8 @@ async fn render_summary_mode(
             write!(output, "  • {} v{}", name, version)?;
 
             if detail_level != DetailLevel::Low && !meta.used_by.is_empty() {
-                write!(output, " (used by {})", meta.used_by.join(", "))?;
+                let used_by: Vec<_> = meta.used_by.iter().map(|n| n.as_str()).collect();
+                write!(output, " (used by {})", used_by.join(", "))?;
             }
             writeln!(output)?;
 
@@ -219,7 +221,8 @@ async fn render_detail_mode(
 
     // Usage information
     if !meta.used_by.is_empty() {
-        writeln!(output, "\nUsed by: {}", meta.used_by.join(", "))?;
+        let used_by: Vec<_> = meta.used_by.iter().map(|n| n.as_str()).collect();
+        writeln!(output, "\nUsed by: {}", used_by.join(", "))?;
     }
 
     // Try to load documentation
@@ -228,11 +231,9 @@ async fn render_detail_mode(
         .await
         .ok_or_else(|| anyhow!("No working directory configured"))?;
 
-    // First try loading existing JSON directly (avoids digest validation)
-    let normalized_name = crate_name.replace('-', "_");
-    let doc_path = workspace_root
-        .join("target/doc")
-        .join(format!("{}.json", normalized_name));
+    // Create CrateName for consistent normalization
+    let crate_name = CrateName::new_unchecked(crate_name);
+    let doc_path = crate_name.doc_json_path(&workspace_root.join("target/doc"));
 
     let doc_result = if doc_path.exists() {
         // JSON exists, load directly without regeneration
@@ -244,7 +245,7 @@ async fn render_detail_mode(
         let version = meta.version.as_deref();
 
         get_docs(
-            crate_name,
+            &crate_name,
             version,
             &workspace_root,
             is_workspace_member,
@@ -591,47 +592,47 @@ mod tests {
     async fn test_inspect_crate_summary_mode() {
         let mut crate_info = HashMap::new();
         crate_info.insert(
-            "my-crate".to_string(),
+            CrateName::new_unchecked("my-crate"),
             CrateMetadata {
                 origin: CrateOrigin::Local,
                 version: Some("0.1.0".to_string()),
                 description: Some("Test crate".to_string()),
                 dev_dep: false,
-                name: "my-crate".to_string(),
+                name: CrateName::new_unchecked("my-crate"),
                 is_root_crate: true,
                 used_by: vec![],
             },
         );
         crate_info.insert(
-            "serde".to_string(),
+            CrateName::new_unchecked("serde"),
             CrateMetadata {
                 origin: CrateOrigin::External,
                 version: Some("1.0.0".to_string()),
                 description: Some("Serialization framework".to_string()),
                 dev_dep: false,
-                name: "serde".to_string(),
+                name: CrateName::new_unchecked("serde"),
                 is_root_crate: false,
-                used_by: vec!["my-crate".to_string()],
+                used_by: vec![CrateName::new_unchecked("my-crate")],
             },
         );
         crate_info.insert(
-            "tokio".to_string(),
+            CrateName::new_unchecked("tokio"),
             CrateMetadata {
                 origin: CrateOrigin::External,
                 version: Some("1.0.0".to_string()),
                 description: Some("Async runtime".to_string()),
                 dev_dep: false,
-                name: "tokio".to_string(),
+                name: CrateName::new_unchecked("tokio"),
                 is_root_crate: false,
-                used_by: vec!["my-crate".to_string()],
+                used_by: vec![CrateName::new_unchecked("my-crate")],
             },
         );
 
         let workspace_ctx = WorkspaceContext {
             root: PathBuf::from("/test/project"),
-            members: vec!["my-crate".to_string()],
+            members: vec![CrateName::new_unchecked("my-crate")],
             crate_info,
-            root_crate: Some("my-crate".to_string()),
+            root_crate: Some(CrateName::new_unchecked("my-crate")),
         };
 
         let state = test_state_with_workspace(workspace_ctx).await;
@@ -655,9 +656,9 @@ mod tests {
     async fn test_inspect_crate_detail_mode_not_found() {
         let workspace_ctx = WorkspaceContext {
             root: PathBuf::from("/test/project"),
-            members: vec!["my-crate".to_string()],
+            members: vec![CrateName::new_unchecked("my-crate")],
             crate_info: HashMap::new(),
-            root_crate: Some("my-crate".to_string()),
+            root_crate: Some(CrateName::new_unchecked("my-crate")),
         };
 
         let state = test_state_with_workspace(workspace_ctx).await;

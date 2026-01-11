@@ -6,6 +6,7 @@ pub mod search;
 pub mod server;
 pub mod stdlib;
 pub mod tools;
+pub mod types;
 pub mod worker;
 pub mod workspace;
 
@@ -19,5 +20,6 @@ pub use search::{
 };
 pub use server::{ItemServer, inline_schema_for_type};
 pub use stdlib::StdlibDocs;
+pub use types::{CrateName, CrateNameError, TypeKind, Visibility};
 pub use worker::{BackgroundWorker, DocState, spawn_background_worker};
 pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext, expand_tilde};

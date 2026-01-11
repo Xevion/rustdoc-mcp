@@ -12,7 +12,5 @@ pub use detection::{
     find_workspace_root, has_workspace_section, is_boundary_directory, is_system_directory,
 };
 pub use lockfile::{LockfileEntry, parse_cargo_lock};
-pub use metadata::{
-    extract_dependencies, get_resolved_versions, validate_crate_name, validate_version,
-};
+pub use metadata::{extract_dependencies, get_resolved_versions, validate_version};
 pub use rustdoc::{generate_docs, get_docs};

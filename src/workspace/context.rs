@@ -1,5 +1,6 @@
 //! Workspace context and crate metadata types.
 
+use crate::types::CrateName;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,11 +29,11 @@ pub struct CrateMetadata {
     /// Is this a dev dependency?
     pub dev_dep: bool,
     /// Crate name
-    pub name: String,
+    pub name: CrateName,
     /// Is this the default crate (root crate)?
     pub is_root_crate: bool,
     /// Which workspace members use this dependency
-    pub used_by: Vec<String>,
+    pub used_by: Vec<CrateName>,
 }
 
 /// Context about a Rust workspace discovered via cargo metadata.
@@ -44,21 +45,19 @@ pub struct WorkspaceContext {
     pub root: PathBuf,
 
     /// Workspace members (crate names)
-    pub members: Vec<String>,
+    pub members: Vec<CrateName>,
 
     /// Detailed crate information with usage tracking, indexed by crate name
-    pub crate_info: HashMap<String, CrateMetadata>,
+    pub crate_info: HashMap<CrateName, CrateMetadata>,
 
     /// Root crate name (if this is a single-crate workspace)
-    pub root_crate: Option<String>,
+    pub root_crate: Option<CrateName>,
 }
 
 impl WorkspaceContext {
     /// Get the default crate name (root crate or first workspace member).
-    pub fn default_crate_name(&self) -> Option<&str> {
-        self.root_crate
-            .as_deref()
-            .or_else(|| self.members.first().map(|s| s.as_str()))
+    pub fn default_crate_name(&self) -> Option<&CrateName> {
+        self.root_crate.as_ref().or_else(|| self.members.first())
     }
 
     /// Detect if we're in a subcrate context (working directory is a workspace member).
@@ -68,27 +67,29 @@ impl WorkspaceContext {
             && self.members.len() > 1
             && self.members.contains(root_pkg)
         {
-            return Some(root_pkg);
+            return Some(root_pkg.as_str());
         }
         None
     }
 
     /// Get the version of a crate by name.
     pub fn get_version(&self, name: &str) -> Option<&str> {
-        self.crate_info.get(name).and_then(|m| m.version.as_deref())
+        let key = CrateName::new_unchecked(name);
+        self.crate_info.get(&key).and_then(|m| m.version.as_deref())
     }
 
     /// Get an iterator over dependency names (excludes workspace members).
     pub fn dependency_names(&self) -> impl Iterator<Item = &str> {
         self.crate_info
             .keys()
-            .filter(|name| !self.members.contains(name))
+            .filter(|name| !self.members.iter().any(|m| m.matches(name.as_str())))
             .map(|s| s.as_str())
     }
 
     /// Get metadata for a specific crate by name.
     pub fn get_crate(&self, name: &str) -> Option<&CrateMetadata> {
-        self.crate_info.get(name)
+        let key = CrateName::new_unchecked(name);
+        self.crate_info.get(&key)
     }
 
     /// Get an iterator over crate info, optionally filtered by workspace member.
@@ -101,7 +102,7 @@ impl WorkspaceContext {
                 Some(member) => {
                     // Include: workspace members + deps used by this member + standard library
                     info.origin == CrateOrigin::Local
-                        || info.used_by.contains(member)
+                        || info.used_by.iter().any(|m| m.matches(member))
                         || info.origin == CrateOrigin::Standard
                 }
                 None => true, // Include all for workspace view
@@ -116,7 +117,7 @@ impl WorkspaceContext {
     /// 2. Direct dependencies sorted by usage count (most-used first)
     /// 3. Dev dependencies (lower priority)
     /// 4. Transitive dependencies (rarely queried directly)
-    pub fn prioritized_crates(&self) -> Vec<String> {
+    pub fn prioritized_crates(&self) -> Vec<CrateName> {
         let mut crates: Vec<_> = self
             .crate_info
             .values()
@@ -138,7 +139,7 @@ impl WorkspaceContext {
                 // Non-dev deps before dev deps
                 .then_with(|| a.dev_dep.cmp(&b.dev_dep))
                 // Finally alphabetical for stability
-                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.name.normalized().cmp(b.name.normalized()))
         });
 
         crates.into_iter().map(|c| c.name.clone()).collect()

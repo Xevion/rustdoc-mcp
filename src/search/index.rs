@@ -1,6 +1,7 @@
 //! TF-IDF inverted index implementation for full-text search.
 
 use crate::item::ItemRef;
+use crate::types::CrateName;
 use postcard::{from_io, to_io};
 use rustdoc_types::Item;
 use serde::{Deserialize, Serialize};
@@ -78,7 +79,7 @@ impl InvertedIndex {
 /// Location information for a documentation item.
 #[derive(Debug, Clone)]
 pub struct ItemLocation {
-    pub crate_name: String,
+    pub crate_name: CrateName,
     pub item_path: Vec<u32>,
 }
 
@@ -95,16 +96,16 @@ pub struct DetailedSearchResult {
     pub name: String,
     pub path: String,
     pub kind: String,
-    pub crate_name: Option<String>,
+    pub crate_name: Option<CrateName>,
     pub docs: Option<String>,
     pub id: Option<rustdoc_types::Id>,
     pub relevance: u32,
-    pub source_crate: Option<String>,
+    pub source_crate: Option<CrateName>,
 }
 
 /// A search index for a specific crate.
 pub struct TermIndex {
-    crate_name: String,
+    crate_name: CrateName,
     terms: InvertedIndex,
 }
 
@@ -119,7 +120,7 @@ impl TermIndex {
         crate_name: &str,
     ) -> Result<
         (
-            String,
+            CrateName,
             std::path::PathBuf,
             std::path::PathBuf,
             InvertedIndex,
@@ -134,18 +135,12 @@ impl TermIndex {
             .ok_or(suggestions)?;
 
         let crate_index = item.crate_index();
-        let crate_name = crate_index.name().to_string();
+        let crate_name = CrateName::new_unchecked(crate_index.name());
 
         // Get paths for docs and index
-        let doc_path = request
-            .workspace_root()
-            .join("target/doc")
-            .join(format!("{}.json", crate_name.replace('-', "_")));
-
-        let index_path = doc_path
-            .parent()
-            .unwrap()
-            .join(format!("{}.index", crate_name.replace('-', "_")));
+        let target_doc = request.workspace_root().join("target/doc");
+        let doc_path = crate_name.doc_json_path(&target_doc);
+        let index_path = crate_name.index_path(&target_doc);
 
         // Build index synchronously
         let start = std::time::Instant::now();
@@ -158,7 +153,7 @@ impl TermIndex {
 
     /// Async portion: checks cache and stores/returns the index.
     async fn load_or_build_async(
-        crate_name: String,
+        crate_name: CrateName,
         doc_path: std::path::PathBuf,
         index_path: std::path::PathBuf,
         prepared_terms: InvertedIndex,

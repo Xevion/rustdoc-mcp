@@ -6,6 +6,7 @@ use crate::search::{
     parse_item_path, resolve_crate_from_path,
 };
 use crate::stdlib::StdlibDocs;
+use crate::types::CrateName;
 use crate::worker::DocState;
 
 use rmcp::schemars;
@@ -91,7 +92,11 @@ pub async fn handle_inspect_item(
 
     // Build list of known crates (members + dependencies)
     let mut known_crates = workspace_ctx.members.clone();
-    known_crates.extend(workspace_ctx.dependency_names().map(|s| s.to_string()));
+    known_crates.extend(
+        workspace_ctx
+            .dependency_names()
+            .map(CrateName::new_unchecked),
+    );
 
     // Create single QueryContext for the entire request (path resolution, search, and module traversal)
     let query_ctx = QueryContext::new(Arc::new(workspace_ctx.clone()));
@@ -108,9 +113,13 @@ pub async fn handle_inspect_item(
 
         // Build full path string (crate_name::path::components)
         let full_path = if path.path_components.is_empty() {
-            crate_name.clone()
+            crate_name.as_str().to_string()
         } else {
-            format!("{}::{}", crate_name, path.path_components.join("::"))
+            format!(
+                "{}::{}",
+                crate_name.as_str(),
+                path.path_components.join("::")
+            )
         };
 
         let mut suggestions = Vec::new();
@@ -129,7 +138,7 @@ pub async fn handle_inspect_item(
             }
 
             // Use ItemRef directly - no need to reload documentation
-            return format_item_output(item_ref, request.detail_level, &crate_name);
+            return format_item_output(item_ref, request.detail_level, crate_name.as_str());
         }
 
         // Path resolution failed - fall back to search within this crate
@@ -140,11 +149,15 @@ pub async fn handle_inspect_item(
     let search_query = path.full_path();
 
     // Determine which crates to search
-    let crates_to_search: Vec<String> = if let Some(crate_name) = specified_crate {
+    let crates_to_search: Vec<CrateName> = if let Some(crate_name) = specified_crate {
         vec![crate_name]
     } else {
         let mut crates = workspace_ctx.members.clone();
-        crates.extend(workspace_ctx.dependency_names().map(|s| s.to_string()));
+        crates.extend(
+            workspace_ctx
+                .dependency_names()
+                .map(CrateName::new_unchecked),
+        );
         crates
     };
 
@@ -167,7 +180,7 @@ pub async fn handle_inspect_item(
         }
 
         // Load search index for this crate
-        let index = match TermIndex::load_or_build(&query_ctx, crate_name) {
+        let index = match TermIndex::load_or_build(&query_ctx, crate_name.as_str()) {
             Ok(index) => index,
             Err(suggestions) => {
                 // Log the failure for debugging
@@ -186,7 +199,7 @@ pub async fn handle_inspect_item(
                         suggestions.first().map(|s| s.path.as_str()).unwrap_or("")
                     )
                 };
-                search_failures.push((crate_name.clone(), error_msg));
+                search_failures.push((crate_name.as_str().to_string(), error_msg));
                 continue;
             }
         };
@@ -202,7 +215,7 @@ pub async fn handle_inspect_item(
         for search_result in search_results {
             // Resolve the item from item_path
             if let Some((item_ref, path_segments)) = query_ctx.get_item_from_id_path(
-                &search_result.item.crate_name,
+                search_result.item.crate_name.as_str(),
                 &search_result.item.item_path,
             ) {
                 // Apply kind filter if specified
@@ -318,7 +331,7 @@ pub async fn handle_inspect_item(
         return Err(format_disambiguation_error(
             &all_results,
             &search_query,
-            crates_to_search.first().unwrap(),
+            crates_to_search.first().unwrap().as_str(),
         ));
     }
 
@@ -328,7 +341,8 @@ pub async fn handle_inspect_item(
         .crate_name
         .as_ref()
         .or(result.source_crate.as_ref())
-        .ok_or_else(|| "No crate information for matched item".to_string())?;
+        .ok_or_else(|| "No crate information for matched item".to_string())?
+        .as_str();
 
     // Get the item directly from the already-loaded documentation via QueryContext
     // This avoids reloading docs which would fail in isolated test environments
@@ -376,7 +390,7 @@ fn format_disambiguation_error(
     for (i, result) in results.iter().enumerate().take(10) {
         // Show crate name prefix in the path
         let full_path = if let Some(src_crate) = &result.source_crate {
-            format!("{}::{}", src_crate, result.path)
+            format!("{}::{}", src_crate.as_str(), result.path)
         } else {
             format!("{}::{}", crate_name, result.path)
         };
@@ -472,11 +486,12 @@ async fn handle_stdlib_inspect(
     use std::path::PathBuf;
 
     let mut crate_info = HashMap::new();
+    let crate_name_key = CrateName::new_unchecked(target_crate.clone());
     crate_info.insert(
-        target_crate.clone(),
+        crate_name_key.clone(),
         CrateMetadata {
             origin: CrateOrigin::Standard,
-            name: target_crate.clone(),
+            name: CrateName::new_unchecked(target_crate.clone()),
             version: Some("nightly".to_string()),
             description: None,
             dev_dep: false,
@@ -545,7 +560,7 @@ async fn handle_stdlib_inspect(
     // Get the best match
     let best = &results[0];
     if let Some((item_ref, _path_segments)) =
-        query_ctx.get_item_from_id_path(&best.item.crate_name, &best.item.item_path)
+        query_ctx.get_item_from_id_path(best.item.crate_name.as_str(), &best.item.item_path)
     {
         if let Some(kind_filter) = request.kind
             && !matches_kind(item_ref.inner(), kind_filter)

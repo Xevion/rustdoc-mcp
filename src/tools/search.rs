@@ -3,6 +3,7 @@
 use crate::{
     search::{QueryContext, TermIndex},
     stdlib::StdlibDocs,
+    types::CrateName,
     worker::DocState,
     workspace::{CrateMetadata, CrateOrigin, WorkspaceContext},
 };
@@ -152,7 +153,9 @@ fn format_search_results(
     for (idx, result) in results.iter().enumerate() {
         let relevance = ((result.rank / max_score) * 100.0).round() as u8;
 
-        match query_ctx.get_item_from_id_path(&result.item.crate_name, &result.item.item_path) {
+        match query_ctx
+            .get_item_from_id_path(result.item.crate_name.as_str(), &result.item.item_path)
+        {
             Some((item, path_segments)) => {
                 let path = path_segments.join("::");
                 output
@@ -208,10 +211,10 @@ async fn handle_stdlib_search(
     // Build a minimal workspace context for stdlib
     let mut crate_info = HashMap::new();
     crate_info.insert(
-        request.crate_name.clone(),
+        CrateName::new_unchecked(request.crate_name.clone()),
         CrateMetadata {
             origin: CrateOrigin::Standard,
-            name: request.crate_name.clone(),
+            name: CrateName::new_unchecked(request.crate_name.clone()),
             version: Some("nightly".to_string()),
             description: None,
             dev_dep: false,

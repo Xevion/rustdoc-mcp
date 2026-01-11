@@ -1,10 +1,11 @@
 //! Rustdoc JSON generation with digest-based caching.
 
 use super::lockfile::parse_cargo_lock;
-use super::metadata::{validate_crate_name, validate_version};
+use super::metadata::validate_version;
 use crate::cache::Hash;
 use crate::error::Result;
 use crate::search::rustdoc::CrateIndex;
+use crate::types::CrateName;
 use anyhow::Context;
 use std::path::Path;
 use tracing::{debug, error, info};
@@ -13,7 +14,7 @@ use tracing::{debug, error, info};
 /// Regenerates documentation when source files change (workspace members) or when
 /// the dependency version/checksum changes (external dependencies).
 pub async fn get_docs(
-    crate_name: &str,
+    crate_name: &CrateName,
     version: Option<&str>,
     workspace_root: &Path,
     is_workspace_member: bool,
@@ -23,37 +24,36 @@ pub async fn get_docs(
         compute_dependency_digest, compute_workspace_digest, load_digest, save_digest,
     };
 
-    let normalized_name = crate_name.replace('-', "_");
     let doc_path = workspace_root
         .join("target")
         .join("doc")
-        .join(format!("{}.json", normalized_name));
+        .join(format!("{}.json", crate_name.normalized()));
     let digest_path = workspace_root
         .join("target")
         .join("doc")
         .join(".digests")
-        .join(format!("{}.digest.json", normalized_name));
+        .join(format!("{}.digest.json", crate_name.normalized()));
 
     // Compute current digest
     let current_digest = if is_workspace_member {
-        compute_workspace_digest(crate_name, workspace_root).await?
+        compute_workspace_digest(crate_name.as_str(), workspace_root).await?
     } else {
         // For dependencies, get checksum from Cargo.lock
         if let Some(lock_path) = cargo_lock_path {
             let crates = parse_cargo_lock(lock_path).await?;
-            if let Some(pkg) = crates.get(crate_name) {
+            if let Some(pkg) = crates.get(crate_name.as_str()) {
                 let checksum = pkg.checksum.unwrap_or_else(|| {
                     // Fallback for dependencies without checksums (e.g., path dependencies)
                     Hash::sha256([0u8; 32])
                 });
-                compute_dependency_digest(crate_name, &pkg.version, checksum).await?
+                compute_dependency_digest(crate_name.as_str(), &pkg.version, checksum).await?
             } else {
                 // Dependency not in Cargo.lock, treat as workspace member
-                compute_workspace_digest(crate_name, workspace_root).await?
+                compute_workspace_digest(crate_name.as_str(), workspace_root).await?
             }
         } else {
             // No Cargo.lock, treat as workspace member
-            compute_workspace_digest(crate_name, workspace_root).await?
+            compute_workspace_digest(crate_name.as_str(), workspace_root).await?
         }
     };
 
@@ -86,12 +86,11 @@ pub async fn get_docs(
 /// Invokes `cargo +nightly rustdoc` to generate JSON documentation.
 /// Requires nightly toolchain. Validates inputs to prevent command injection.
 pub async fn generate_docs(
-    crate_name: &str,
+    crate_name: &CrateName,
     version: Option<&str>,
     workspace_root: &Path,
 ) -> Result<()> {
-    // Validate inputs to prevent command injection
-    validate_crate_name(crate_name)?;
+    // Validate version to prevent command injection (crate_name already validated)
     if let Some(ver) = version {
         validate_version(ver)?;
     }

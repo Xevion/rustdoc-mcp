@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::types::CrateName;
+
 /// A specialized Result type for rustdoc-mcp operations.
 ///
 /// This is an alias for `anyhow::Result` with context added via `.context()` and
@@ -12,13 +14,22 @@ pub type Result<T> = anyhow::Result<T>;
 #[derive(Debug, Clone)]
 pub enum LoadError {
     /// Crate documentation not found and cannot be generated.
-    NotFound { crate_name: String },
+    NotFound { crate_name: CrateName },
     /// Documentation file not found at the expected path.
-    NotFoundAt { crate_name: String, path: PathBuf },
+    NotFoundAt {
+        crate_name: CrateName,
+        path: PathBuf,
+    },
     /// Failed to generate documentation (e.g., rustdoc command failed).
-    GenerationFailed { crate_name: String, error: String },
+    GenerationFailed {
+        crate_name: CrateName,
+        error: String,
+    },
     /// Failed to load or parse the documentation file.
-    ParseError { crate_name: String, error: String },
+    ParseError {
+        crate_name: CrateName,
+        error: String,
+    },
 }
 
 impl std::fmt::Display for LoadError {

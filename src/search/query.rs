@@ -4,6 +4,7 @@
 use crate::error::LoadError;
 use crate::item::ItemRef;
 use crate::search::rustdoc::CrateIndex;
+use crate::types::CrateName;
 use crate::workspace::WorkspaceContext;
 use bumpalo::Bump;
 use rapidfuzz::distance::jaro_winkler;
@@ -22,7 +23,7 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct QueryPath {
     /// The crate name if explicitly specified or resolved
-    pub crate_name: Option<String>,
+    pub crate_name: Option<CrateName>,
     /// Path components (modules and item name)
     pub path_components: Vec<String>,
 }
@@ -94,20 +95,17 @@ pub fn parse_item_path(query: &str) -> QueryPath {
 /// and removed from the path components.
 ///
 /// Returns the resolved crate name if found.
-pub fn resolve_crate_from_path(path: &mut QueryPath, known_crates: &[String]) -> Option<String> {
+pub fn resolve_crate_from_path(
+    path: &mut QueryPath,
+    known_crates: &[CrateName],
+) -> Option<CrateName> {
     if path.path_components.is_empty() {
         return None;
     }
 
     let first = &path.path_components[0];
-    // Normalize by replacing hyphens with underscores for comparison
-    // (Rust allows both `serde-json` and `serde_json` to refer to the same crate)
-    let first_normalized = first.replace('-', "_");
 
-    if let Some(matched_crate) = known_crates
-        .iter()
-        .find(|c| c.replace('-', "_") == first_normalized)
-    {
+    if let Some(matched_crate) = known_crates.iter().find(|c| c.matches(first)) {
         // First component matches a known crate
         let _removed = path.path_components.remove(0);
         path.crate_name = Some(matched_crate.clone());
@@ -161,7 +159,7 @@ pub struct QueryContext {
     /// Bump allocator for request-scoped memory management
     arena: Bump,
     /// Per-query cache of loaded documentation indices
-    doc_cache: RefCell<HashMap<String, ArenaPtr<CrateIndex>>>,
+    doc_cache: RefCell<HashMap<CrateName, ArenaPtr<CrateIndex>>>,
 }
 
 impl Debug for QueryContext {
@@ -201,15 +199,9 @@ impl QueryContext {
             return Ok(unsafe { cached_ptr.as_ref() });
         }
 
-        // Normalize crate name (replace dashes with underscores for file lookup)
-        let normalized_name = crate_name.replace('-', "_");
-
         // Try to find and load the JSON doc file
-        let doc_path = self
-            .workspace
-            .root
-            .join("target/doc")
-            .join(format!("{}.json", normalized_name));
+        let crate_name_typed = CrateName::new_unchecked(crate_name);
+        let doc_path = crate_name_typed.doc_json_path(&self.workspace.root.join("target/doc"));
 
         // If documentation doesn't exist, check if we can generate it
         if !doc_path.exists() {
@@ -220,7 +212,7 @@ impl QueryContext {
                     crate_name
                 );
                 return Err(LoadError::NotFound {
-                    crate_name: crate_name.to_string(),
+                    crate_name: crate_name_typed,
                 });
             }
 
@@ -229,7 +221,7 @@ impl QueryContext {
                 crate_name
             );
 
-            let is_workspace_member = self.workspace.members.contains(&crate_name.to_string());
+            let is_workspace_member = self.workspace.members.iter().any(|m| m.matches(crate_name));
             let version = self.workspace.get_version(crate_name);
 
             let cargo_lock_path = self.workspace.root.join("Cargo.lock");
@@ -239,7 +231,7 @@ impl QueryContext {
             let result = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     crate::workspace::get_docs(
-                        crate_name,
+                        &crate_name_typed,
                         version,
                         &self.workspace.root,
                         is_workspace_member,
@@ -252,7 +244,7 @@ impl QueryContext {
             if let Err(e) = result {
                 tracing::error!("Failed to generate docs for '{}': {}", crate_name, e);
                 return Err(LoadError::GenerationFailed {
-                    crate_name: crate_name.to_string(),
+                    crate_name: crate_name_typed,
                     error: e.to_string(),
                 });
             }
@@ -261,7 +253,7 @@ impl QueryContext {
         // Verify the file now exists (generation might have failed silently)
         if !doc_path.exists() {
             return Err(LoadError::NotFoundAt {
-                crate_name: crate_name.to_string(),
+                crate_name: crate_name_typed,
                 path: doc_path,
             });
         }
@@ -270,7 +262,7 @@ impl QueryContext {
         let crate_index = CrateIndex::load(&doc_path).map_err(|e| {
             tracing::error!("Failed to load docs for '{}': {}", crate_name, e);
             LoadError::ParseError {
-                crate_name: crate_name.to_string(),
+                crate_name: CrateName::new_unchecked(crate_name),
                 error: e.to_string(),
             }
         })?;
@@ -284,7 +276,7 @@ impl QueryContext {
         let arena_ptr = ArenaPtr::new(allocated);
         self.doc_cache
             .borrow_mut()
-            .insert(crate_name.to_string(), arena_ptr);
+            .insert(CrateName::new_unchecked(crate_name), arena_ptr);
         allocated
     }
 
@@ -306,7 +298,7 @@ impl QueryContext {
         }
 
         // For workspace members, check that source directory exists
-        if self.workspace.members.contains(&crate_name.to_string()) {
+        if self.workspace.members.iter().any(|m| m.matches(crate_name)) {
             let src_dir = self.workspace.root.join("src");
             if !src_dir.exists() {
                 tracing::debug!(
@@ -385,12 +377,8 @@ impl QueryContext {
         }
 
         // Discovery: Check if a JSON file exists even though crate isn't in workspace
-        let normalized_name = crate_name.replace('-', "_");
-        let doc_path = self
-            .workspace
-            .root
-            .join("target/doc")
-            .join(format!("{}.json", normalized_name));
+        let doc_path = CrateName::new_unchecked(crate_name)
+            .doc_json_path(&self.workspace.root.join("target/doc"));
 
         if doc_path.exists() {
             tracing::debug!(
@@ -401,7 +389,7 @@ impl QueryContext {
 
             // Load directly from the JSON file without trying to regenerate
             let crate_index = CrateIndex::load(&doc_path).map_err(|e| LoadError::ParseError {
-                crate_name: crate_name.to_string(),
+                crate_name: CrateName::new_unchecked(crate_name),
                 error: e.to_string(),
             })?;
 
@@ -409,7 +397,7 @@ impl QueryContext {
         }
 
         Err(LoadError::NotFound {
-            crate_name: crate_name.to_string(),
+            crate_name: CrateName::new_unchecked(crate_name),
         })
     }
 
@@ -601,12 +589,15 @@ mod tests {
         #[case] expected_module: Option<&str>,
     ) {
         let mut path = parse_item_path(input);
-        let known_crates_vec: Vec<String> = known_crates.iter().map(|s| s.to_string()).collect();
+        let known_crates_vec: Vec<CrateName> = known_crates
+            .iter()
+            .map(|s| CrateName::new_unchecked(*s))
+            .collect();
 
         let crate_name = resolve_crate_from_path(&mut path, &known_crates_vec);
 
-        check!(crate_name == expected_crate.map(String::from));
-        check!(path.crate_name == expected_crate.map(String::from));
+        check!(crate_name == expected_crate.map(CrateName::new_unchecked));
+        check!(path.crate_name == expected_crate.map(CrateName::new_unchecked));
         check!(path.item_name() == expected_item);
 
         if expected_crate.is_some() {

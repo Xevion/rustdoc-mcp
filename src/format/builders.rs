@@ -8,6 +8,7 @@
 use crate::error::Result;
 use crate::format::extraction::TypeInfo;
 use crate::search::CrateIndex;
+use crate::types::TypeKind;
 use anyhow::Context;
 use rustdoc_types::{
     GenericBound, GenericParamDef, GenericParamDefKind, Generics, Id, Item, ItemEnum, Type,
@@ -40,17 +41,16 @@ fn build_unformatted_syntax(def: &TypeInfo, index: &CrateIndex) -> Result<String
     }
 
     // Build the type definition based on kind
-    match def.kind.as_str() {
-        "struct" => {
+    match def.kind {
+        TypeKind::Struct => {
             output.push_str(&build_struct_definition(def, index)?);
         }
-        "enum" => {
+        TypeKind::Enum => {
             output.push_str(&build_enum_definition(def, index)?);
         }
-        "union" => {
+        TypeKind::Union => {
             output.push_str(&build_union_definition(def, index)?);
         }
-        _ => {}
     }
 
     Ok(output)

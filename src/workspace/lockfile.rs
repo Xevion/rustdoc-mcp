@@ -2,6 +2,7 @@
 
 use crate::cache::Hash;
 use crate::error::Result;
+use crate::types::CrateName;
 use anyhow::Context;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -10,14 +11,14 @@ use std::path::Path;
 /// Metadata for a crate entry from Cargo.lock
 #[derive(Debug, Clone)]
 pub struct LockfileEntry {
-    pub name: String,
+    pub name: CrateName,
     pub version: String,
     pub checksum: Option<Hash>,
     pub source: Option<String>,
 }
 
 /// Parse Cargo.lock and return a map of crate name to lockfile entry
-pub async fn parse_cargo_lock(lock_path: &Path) -> Result<HashMap<String, LockfileEntry>> {
+pub async fn parse_cargo_lock(lock_path: &Path) -> Result<HashMap<CrateName, LockfileEntry>> {
     let content = tokio::fs::read_to_string(lock_path)
         .await
         .with_context(|| format!("Failed to read Cargo.lock at {}", lock_path.display()))?;
@@ -37,9 +38,9 @@ pub async fn parse_cargo_lock(lock_path: &Path) -> Result<HashMap<String, Lockfi
         };
 
         crates.insert(
-            package.name.clone(),
+            CrateName::new_unchecked(package.name.clone()),
             LockfileEntry {
-                name: package.name,
+                name: CrateName::new_unchecked(package.name),
                 version: package.version,
                 checksum,
                 source: package.source,

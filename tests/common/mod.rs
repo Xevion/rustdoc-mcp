@@ -30,7 +30,7 @@
 
 use rstest::fixture;
 use rustdoc_mcp::tools::search::{SearchRequest, handle_search};
-use rustdoc_mcp::{CrateMetadata, CrateOrigin, DocState, WorkspaceContext};
+use rustdoc_mcp::{CrateMetadata, CrateName, CrateOrigin, DocState, WorkspaceContext};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -215,7 +215,7 @@ impl IsolatedWorkspace {
         if source_doc_dir.exists() {
             for crate_name in crates {
                 // Normalize crate name for file lookup (hyphens → underscores)
-                let normalized = crate_name.replace('-', "_");
+                let normalized = CrateName::normalize(crate_name);
                 let json_file = format!("{}.json", normalized);
                 let source_path = source_doc_dir.join(&json_file);
 
@@ -247,7 +247,7 @@ impl IsolatedWorkspace {
         for crate_name in crates {
             let is_local = *crate_name == "rustdoc-mcp";
             crate_info.insert(
-                crate_name.to_string(),
+                CrateName::new_unchecked(*crate_name),
                 CrateMetadata {
                     origin: if is_local {
                         CrateOrigin::Local
@@ -261,7 +261,7 @@ impl IsolatedWorkspace {
                     }),
                     description: None,
                     dev_dep: false,
-                    name: crate_name.to_string(),
+                    name: CrateName::new_unchecked(*crate_name),
                     is_root_crate: is_local,
                     used_by: vec![],
                 },
@@ -271,9 +271,9 @@ impl IsolatedWorkspace {
         let root = workspace.path().to_path_buf();
         let metadata = WorkspaceContext {
             root: root.clone(),
-            members: vec!["rustdoc-mcp".to_string()],
+            members: vec![CrateName::new_unchecked("rustdoc-mcp")],
             crate_info,
-            root_crate: Some("rustdoc-mcp".to_string()),
+            root_crate: Some(CrateName::new_unchecked("rustdoc-mcp")),
         };
 
         let state = Arc::new(DocState::new(None));
@@ -353,13 +353,13 @@ pub fn shared_state() -> Arc<DocState> {
 
     // The local crate
     crate_info.insert(
-        "rustdoc-mcp".to_string(),
+        CrateName::new_unchecked("rustdoc-mcp"),
         CrateMetadata {
             origin: CrateOrigin::Local,
             version: Some("0.2.0".to_string()),
             description: Some("MCP server for Rust documentation".to_string()),
             dev_dep: false,
-            name: "rustdoc-mcp".to_string(),
+            name: CrateName::new_unchecked("rustdoc-mcp"),
             is_root_crate: true,
             used_by: vec![],
         },
@@ -367,26 +367,26 @@ pub fn shared_state() -> Arc<DocState> {
 
     // External dependencies we test against
     crate_info.insert(
-        "serde".to_string(),
+        CrateName::new_unchecked("serde"),
         CrateMetadata {
             origin: CrateOrigin::External,
             version: Some("1.0".to_string()),
             description: None,
             dev_dep: false,
-            name: "serde".to_string(),
+            name: CrateName::new_unchecked("serde"),
             is_root_crate: false,
             used_by: vec![],
         },
     );
 
     crate_info.insert(
-        "serde_json".to_string(),
+        CrateName::new_unchecked("serde_json"),
         CrateMetadata {
             origin: CrateOrigin::External,
             version: Some("1.0".to_string()),
             description: None,
             dev_dep: false,
-            name: "serde_json".to_string(),
+            name: CrateName::new_unchecked("serde_json"),
             is_root_crate: false,
             used_by: vec![],
         },
@@ -394,9 +394,9 @@ pub fn shared_state() -> Arc<DocState> {
 
     let metadata = WorkspaceContext {
         root: project_root.clone(),
-        members: vec!["rustdoc-mcp".to_string()],
+        members: vec![CrateName::new_unchecked("rustdoc-mcp")],
         crate_info,
-        root_crate: Some("rustdoc-mcp".to_string()),
+        root_crate: Some(CrateName::new_unchecked("rustdoc-mcp")),
     };
 
     let state = Arc::new(DocState::new(None));

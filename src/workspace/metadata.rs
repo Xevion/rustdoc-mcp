@@ -6,18 +6,6 @@ use cargo_metadata::{DependencyKind, MetadataCommand};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// Validate crate name contains only safe characters
-pub fn validate_crate_name(name: &str) -> Result<()> {
-    let crate_name_regex = regex::Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
-    if !crate_name_regex.is_match(name) {
-        anyhow::bail!(
-            "Invalid crate name '{}': must contain only alphanumeric characters, hyphens, and underscores",
-            name
-        );
-    }
-    Ok(())
-}
-
 /// Validate version string matches semver format
 pub fn validate_version(version: &str) -> Result<()> {
     let version_regex = regex::Regex::new(r"^\d+(\.\d+){0,2}").unwrap();

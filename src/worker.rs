@@ -7,6 +7,7 @@
 use crate::search::CrateIndex;
 use crate::stdlib::StdlibDocs;
 use crate::tools::set_workspace::handle_set_workspace;
+use crate::types::CrateName;
 use crate::workspace::{WorkspaceContext, auto_detect_workspace};
 use anyhow::Result;
 use futures::FutureExt;
@@ -36,10 +37,10 @@ type SharedDocFuture = Shared<BoxFuture<'static, Result<Arc<CrateIndex>, String>
 /// - Storing workspace context
 pub struct DocState {
     /// LRU cache of parsed crate indices
-    cache: RwLock<LruCache<String, Arc<CrateIndex>>>,
+    cache: RwLock<LruCache<CrateName, Arc<CrateIndex>>>,
 
     /// In-flight generation futures (can be awaited by multiple callers)
-    in_flight: Mutex<HashMap<String, SharedDocFuture>>,
+    in_flight: Mutex<HashMap<CrateName, SharedDocFuture>>,
 
     /// Current workspace context (if detected/configured)
     workspace: RwLock<Option<WorkspaceContext>>,
@@ -179,7 +180,7 @@ impl DocState {
 
         let is_workspace_member = meta.origin == crate::workspace::CrateOrigin::Local;
         let version = meta.version.clone();
-        let crate_name_owned = crate_name.to_string();
+        let crate_name_owned = CrateName::new_unchecked(crate_name);
 
         // Create the generation future
         let generation_future: BoxFuture<'static, Result<Arc<CrateIndex>, String>> =
@@ -202,7 +203,7 @@ impl DocState {
         // Store in in_flight map
         {
             let mut in_flight = self.in_flight.lock().await;
-            in_flight.insert(crate_name.to_string(), shared_future.clone());
+            in_flight.insert(CrateName::new_unchecked(crate_name), shared_future.clone());
         }
 
         tracing::info!("Starting documentation generation for {}", crate_name);
@@ -219,7 +220,7 @@ impl DocState {
         // Cache on success
         if let Ok(ref index) = result {
             let mut cache = self.cache.write().await;
-            cache.put(crate_name.to_string(), index.clone());
+            cache.put(CrateName::new_unchecked(crate_name), index.clone());
             tracing::debug!("Cached docs for {}", crate_name);
         }
 
@@ -242,7 +243,7 @@ impl DocState {
     }
 
     /// Put a CrateIndex directly into the cache.
-    pub async fn put_cached(&self, crate_name: String, index: Arc<CrateIndex>) {
+    pub async fn put_cached(&self, crate_name: CrateName, index: Arc<CrateIndex>) {
         self.cache.write().await.put(crate_name, index);
     }
 }
@@ -340,19 +341,19 @@ impl BackgroundWorker {
 
         for crate_name in prioritized {
             // Skip if already cached or generating
-            if self.state.is_cached(&crate_name).await
-                || self.state.is_generating(&crate_name).await
+            if self.state.is_cached(crate_name.as_str()).await
+                || self.state.is_generating(crate_name.as_str()).await
             {
                 continue;
             }
 
             // Skip stdlib crates (handled separately)
-            if StdlibDocs::is_stdlib_crate(&crate_name) {
+            if StdlibDocs::is_stdlib_crate(crate_name.as_str()) {
                 continue;
             }
 
             // Generate docs (this will cache on success)
-            match self.state.get_docs(&crate_name).await {
+            match self.state.get_docs(crate_name.as_str()).await {
                 Ok(_) => {
                     tracing::debug!("Background generated docs for {}", crate_name);
                 }

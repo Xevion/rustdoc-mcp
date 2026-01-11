@@ -4,6 +4,7 @@
 //! standard library crates from the `rust-docs-json` nightly component.
 
 use crate::search::CrateIndex;
+use crate::types::CrateName;
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,7 +23,7 @@ pub struct StdlibDocs {
     /// Path to the nightly sysroot
     sysroot: PathBuf,
     /// Lazily loaded crate indices
-    loaded: RwLock<HashMap<String, Arc<CrateIndex>>>,
+    loaded: RwLock<HashMap<CrateName, Arc<CrateIndex>>>,
     /// Rustc version (for display purposes)
     rustc_version: String,
 }
@@ -143,7 +144,10 @@ impl StdlibDocs {
         // Cache it
         {
             let mut loaded = self.loaded.write().await;
-            loaded.insert(crate_name.to_string(), index.clone());
+            loaded.insert(
+                CrateName::new_unchecked(crate_name.to_string()),
+                index.clone(),
+            );
         }
 
         tracing::debug!("Loaded stdlib docs for {}", crate_name);

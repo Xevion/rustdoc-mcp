@@ -1,18 +1,19 @@
 use crate::format::TypeFormatter;
 use crate::search::CrateIndex;
+use crate::types::{CrateName, TypeKind, Visibility};
 use rustdoc_types::{Generics, Id, Item, ItemEnum};
 
 #[derive(Debug, Clone)]
 pub struct TypeInfo {
     pub name: String,
-    pub kind: String,
+    pub kind: TypeKind,
     pub path: String,
     pub fields: Option<Vec<FieldInfo>>,
     pub variants: Option<Vec<VariantInfo>>,
     pub docs: Option<String>,
     pub generics: Generics,
     pub item_id: Id,
-    pub source_crate: String,
+    pub source_crate: CrateName,
 }
 
 #[derive(Debug, Clone)]
@@ -20,7 +21,7 @@ pub struct FieldInfo {
     pub name: String,
     pub type_name: String,
     pub docs: Option<String>,
-    pub visibility: String,
+    pub visibility: Visibility,
 }
 
 #[derive(Debug, Clone)]
@@ -38,7 +39,7 @@ pub struct VariantInfo {
 pub fn extract_type_definition(
     item: &Item,
     index: &CrateIndex,
-    source_crate: String,
+    source_crate: CrateName,
 ) -> Option<TypeInfo> {
     let name = item.name.as_ref()?.clone();
     let docs = item.docs.clone();
@@ -50,7 +51,7 @@ pub fn extract_type_definition(
             let fields = extract_struct_fields(&s.kind, index);
             Some(TypeInfo {
                 name,
-                kind: "struct".to_string(),
+                kind: TypeKind::Struct,
                 path,
                 fields: Some(fields),
                 variants: None,
@@ -64,7 +65,7 @@ pub fn extract_type_definition(
             let variants = extract_enum_variants(&e.variants, index);
             Some(TypeInfo {
                 name,
-                kind: "enum".to_string(),
+                kind: TypeKind::Enum,
                 path,
                 fields: None,
                 variants: Some(variants),
@@ -78,7 +79,7 @@ pub fn extract_type_definition(
             let fields = extract_union_fields(&u.fields, index);
             Some(TypeInfo {
                 name,
-                kind: "union".to_string(),
+                kind: TypeKind::Union,
                 path,
                 fields: Some(fields),
                 variants: None,
@@ -114,7 +115,7 @@ fn extract_struct_fields(kind: &rustdoc_types::StructKind, index: &CrateIndex) -
                                 .unwrap_or_else(|| "<unnamed>".to_string()),
                             type_name: index.format_type(ty),
                             docs: field_item.docs.clone(),
-                            visibility: "pub".to_string(),
+                            visibility: Visibility::Public,
                         })
                     } else {
                         None
@@ -140,7 +141,7 @@ fn extract_struct_fields(kind: &rustdoc_types::StructKind, index: &CrateIndex) -
                             name: idx.to_string(),
                             type_name: index.format_type(ty),
                             docs: field_item.docs.clone(),
-                            visibility: "pub".to_string(),
+                            visibility: Visibility::Public,
                         })
                     } else {
                         None
@@ -172,7 +173,7 @@ fn extract_union_fields(fields: &[rustdoc_types::Id], index: &CrateIndex) -> Vec
                         .unwrap_or_else(|| "<unnamed>".to_string()),
                     type_name: index.format_type(ty),
                     docs: field_item.docs.clone(),
-                    visibility: "pub".to_string(),
+                    visibility: Visibility::Public,
                 })
             } else {
                 None
@@ -234,7 +235,7 @@ fn extract_enum_variants(variants: &[rustdoc_types::Id], index: &CrateIndex) -> 
                                             .unwrap_or_else(|| "<unnamed>".to_string()),
                                         type_name: index.format_type(ty),
                                         docs: field_item.docs.clone(),
-                                        visibility: "pub".to_string(),
+                                        visibility: Visibility::Public,
                                     })
                                 } else {
                                     None

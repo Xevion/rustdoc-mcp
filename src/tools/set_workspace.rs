@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::types::CrateName;
 use crate::workspace::{CrateMetadata, CrateOrigin, WorkspaceContext, find_workspace_root};
 use anyhow::anyhow;
 use cargo_metadata::{DependencyKind, Metadata, MetadataCommand};
@@ -122,17 +123,19 @@ pub async fn handle_set_workspace(
     .map_err(|e| anyhow!("Task panicked: `{}`", e))??;
 
     // Extract workspace members using typed API
-    let members: Vec<String> = metadata
+    let members: Vec<CrateName> = metadata
         .workspace_packages()
         .iter()
-        .map(|pkg| pkg.name.to_string())
+        .map(|pkg| CrateName::new_unchecked(pkg.name.to_string()))
         .collect();
 
     let workspace_ctx = WorkspaceContext {
         root: workspace_root.clone(),
         members: members.clone(),
         crate_info: collect_crate_metadata(&metadata, &members),
-        root_crate: metadata.root_package().map(|p| p.name.to_string()),
+        root_crate: metadata
+            .root_package()
+            .map(|p| CrateName::new_unchecked(p.name.to_string())),
     };
 
     Ok((workspace_root, workspace_ctx, workspace_changed))
@@ -210,8 +213,8 @@ pub fn format_response(
 /// tracking which workspace members use each dependency.
 fn collect_crate_metadata(
     metadata: &Metadata,
-    member_names: &[String],
-) -> HashMap<String, CrateMetadata> {
+    member_names: &[CrateName],
+) -> HashMap<CrateName, CrateMetadata> {
     let mut crates = HashMap::new();
     let is_workspace = member_names.len() > 1;
     let root_package_name = metadata.root_package().map(|p| p.name.as_str());
@@ -219,10 +222,10 @@ fn collect_crate_metadata(
     // 1. Add workspace members
     for package in metadata.workspace_packages() {
         crates.insert(
-            package.name.to_string(),
+            CrateName::new_unchecked(package.name.to_string()),
             CrateMetadata {
                 origin: CrateOrigin::Local,
-                name: package.name.to_string(),
+                name: CrateName::new_unchecked(package.name.to_string()),
                 version: Some(package.version.to_string()),
                 description: package.description.clone(),
                 dev_dep: false,
@@ -234,13 +237,13 @@ fn collect_crate_metadata(
     }
 
     // 2. Track dependency usage
-    let mut dep_usage: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut dep_usage: BTreeMap<String, Vec<CrateName>> = BTreeMap::new();
     let mut dep_dev_status: BTreeMap<String, bool> = BTreeMap::new();
 
     for package in metadata.workspace_packages() {
         for dep in &package.dependencies {
             // Skip workspace-internal dependencies (path dependencies or members)
-            if dep.path.is_some() || member_names.contains(&dep.name) {
+            if dep.path.is_some() || member_names.iter().any(|m| m.matches(&dep.name)) {
                 continue;
             }
 
@@ -248,7 +251,7 @@ fn collect_crate_metadata(
             dep_usage
                 .entry(dep.name.clone())
                 .or_default()
-                .push(package.name.to_string());
+                .push(CrateName::new_unchecked(package.name.to_string()));
 
             // Track if ANY workspace member uses this as a dev dep
             let current_dev = dep_dev_status.get(&dep.name).copied().unwrap_or(false);
@@ -262,10 +265,10 @@ fn collect_crate_metadata(
         let pkg_metadata = metadata.packages.iter().find(|p| p.name == dep_name);
 
         crates.insert(
-            dep_name.clone(),
+            CrateName::new_unchecked(dep_name.clone()),
             CrateMetadata {
                 origin: CrateOrigin::External,
-                name: dep_name,
+                name: CrateName::new_unchecked(dep_name),
                 version: pkg_metadata.map(|p| p.version.to_string()),
                 description: pkg_metadata.and_then(|p| p.description.clone()),
                 dev_dep,
@@ -279,10 +282,10 @@ fn collect_crate_metadata(
     if let Some(rustc_version) = get_rustc_version() {
         for stdlib_name in ["std", "core", "alloc", "proc_macro", "test"] {
             crates.insert(
-                stdlib_name.to_string(),
+                CrateName::new_unchecked(stdlib_name),
                 CrateMetadata {
                     origin: CrateOrigin::Standard,
-                    name: stdlib_name.to_string(),
+                    name: CrateName::new_unchecked(stdlib_name),
                     version: Some(rustc_version.clone()),
                     description: None,
                     dev_dep: false,
