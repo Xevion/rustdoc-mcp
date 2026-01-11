@@ -6,13 +6,7 @@ use rstest::rstest;
 use rustdoc_mcp::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
 use rustdoc_mcp::{DetailLevel, ItemKind};
 
-// --- TDD Tests: External Dependencies (serde, serde_json) ---
-// These tests fail because serde.json only contains re-exports to serde_core.
-// The actual Serialize/Deserialize traits are defined in serde_core.json.
-// Cross-crate re-export following is not yet implemented.
-
-/// Test: Find Serialize trait via serde::Serialize.
-/// BUG: serde.json has a `use` item, not the trait definition.
+/// Test: Find Serialize trait via serde::Serialize (resolves cross-crate re-exports).
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_finds_serialize_trait(isolated_workspace_with_serde: IsolatedWorkspace) {
@@ -31,7 +25,6 @@ async fn inspect_finds_serialize_trait(isolated_workspace_with_serde: IsolatedWo
 }
 
 /// Test: Find Deserialize trait via simple lookup.
-/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_successful_simple_lookup(isolated_workspace_with_serde: IsolatedWorkspace) {
@@ -50,7 +43,6 @@ async fn inspect_successful_simple_lookup(isolated_workspace_with_serde: Isolate
 }
 
 /// Test: Find Serialize trait via qualified path.
-/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_successful_qualified_path(isolated_workspace_with_serde: IsolatedWorkspace) {
@@ -84,7 +76,6 @@ async fn inspect_no_matches_found(isolated_workspace: IsolatedWorkspace) {
 }
 
 /// Test: Inspect with minimal verbosity.
-/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_minimal_verbosity(isolated_workspace_with_serde: IsolatedWorkspace) {
@@ -104,7 +95,6 @@ async fn inspect_minimal_verbosity(isolated_workspace_with_serde: IsolatedWorksp
 }
 
 /// Test: Inspect with full verbosity.
-/// BUG: serde.json has a `use` item, not the trait definition.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_full_verbosity(isolated_workspace_with_serde: IsolatedWorkspace) {
@@ -159,12 +149,7 @@ async fn inspect_enum_with_variants(isolated_workspace_with_serde: IsolatedWorks
     check!(output.contains("Null") || output.contains("Bool") || output.contains("Number"));
 }
 
-// --- TDD Tests: Local Crate (expected to FAIL) ---
-// Tests for local crate item lookup. These document known bugs.
-
 /// Test: Find a local struct by simple name.
-/// BUG: This may succeed but return a malformed path like
-/// "rustdoc-mcp::rustdoc_mcp::search::query::QueryContext"
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_local_struct_simple_name(isolated_workspace: IsolatedWorkspace) {
@@ -189,7 +174,6 @@ async fn inspect_local_struct_simple_name(isolated_workspace: IsolatedWorkspace)
 }
 
 /// Test: Find a local struct by full qualified path.
-/// BUG: Full path queries for local crate items fail to resolve.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_local_struct_full_path(isolated_workspace: IsolatedWorkspace) {
@@ -212,7 +196,6 @@ async fn inspect_local_struct_full_path(isolated_workspace: IsolatedWorkspace) {
 }
 
 /// Test: Find a local module by name.
-/// BUG: Module lookups for local crate fail.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_local_module(isolated_workspace: IsolatedWorkspace) {
@@ -229,8 +212,7 @@ async fn inspect_local_module(isolated_workspace: IsolatedWorkspace) {
     check!(output.contains("workspace"));
 }
 
-/// Test: Find the only trait in the local crate.
-/// BUG: TypeFormatter trait is not found.
+/// Test: Find the TypeFormatter trait in the local crate.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_local_trait(isolated_workspace: IsolatedWorkspace) {
@@ -252,8 +234,7 @@ async fn inspect_local_trait(isolated_workspace: IsolatedWorkspace) {
     check!(output.contains("trait"));
 }
 
-/// Test: Find BackgroundWorker struct which is a public export.
-/// BUG: Even though it's listed in exports, it's not found.
+/// Test: Find BackgroundWorker struct (public export).
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_local_backgroundworker(isolated_workspace: IsolatedWorkspace) {

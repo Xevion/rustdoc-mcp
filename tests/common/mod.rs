@@ -135,14 +135,14 @@ members = ["member1", "member2"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 "#
         } else {
             r#"
 [package]
 name = "test-package"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 "#
         };
         self.create_file(path, content);
@@ -331,9 +331,10 @@ pub fn isolated_workspace() -> IsolatedWorkspace {
 /// Creates an isolated workspace with serde dependencies for testing.
 ///
 /// Same as `isolated_workspace` but also includes serde and serde_json crates.
+/// Also includes serde_core for cross-crate re-export resolution.
 #[fixture]
 pub fn isolated_workspace_with_serde() -> IsolatedWorkspace {
-    IsolatedWorkspace::with_deps(&["rustdoc-mcp", "serde", "serde_json"])
+    IsolatedWorkspace::with_deps(&["rustdoc-mcp", "serde", "serde_json", "serde_core"])
 }
 
 /// Creates a ServerContext using the real project directory (shared state).
@@ -437,7 +438,7 @@ pub fn shared_context() -> ServerContext {
 /// async fn test_warm_cache_behavior(isolated_workspace: IsolatedWorkspace) {
 ///     // Warm the cache first
 ///     warm_cache(&isolated_workspace.context, &["rustdoc-mcp"]).await;
-///     
+///
 ///     // Now test with warm cache
 ///     let result = handle_search(&isolated_workspace.context, ...).await;
 /// }

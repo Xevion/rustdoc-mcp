@@ -7,10 +7,11 @@ use crate::search::{
 };
 use crate::server::ServerContext;
 use crate::stdlib::StdlibDocs;
-use crate::workspace::get_docs;
+
 use rmcp::schemars;
 use rustdoc_types::{Item, ItemEnum};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -82,16 +83,14 @@ pub async fn handle_inspect_item(
     // Parse the item path
     let mut path = parse_item_path(&request.query);
 
-    // Get workspace root directory
-    let workspace_root = context
+    // Verify workspace is configured
+    context
         .working_directory()
         .ok_or_else(|| "No working directory configured. Use set_workspace first.".to_string())?;
 
     // Build list of known crates (members + dependencies)
     let mut known_crates = workspace_ctx.members.clone();
     known_crates.extend(workspace_ctx.dependency_names().map(|s| s.to_string()));
-
-    let cargo_lock_path = context.cargo_lock_path();
 
     // Create single QueryContext for the entire request (path resolution, search, and module traversal)
     let query_ctx = QueryContext::new(Arc::new(workspace_ctx.clone()));
@@ -235,6 +234,46 @@ pub async fn handle_inspect_item(
             .then_with(|| a.name.cmp(&b.name))
     });
 
+    // Deduplicate results by item ID (same item may appear at different paths due to re-exports)
+    {
+        let mut seen_ids = HashSet::new();
+        all_results.retain(|result| {
+            if let Some(id) = &result.id {
+                seen_ids.insert(*id)
+            } else {
+                true // Keep items without IDs
+            }
+        });
+    }
+
+    // For simple name queries (no ::), prioritize exact name matches to avoid
+    // unnecessary disambiguation when user clearly wants a specific item
+    let is_simple_name = !request.query.contains("::");
+    if is_simple_name && all_results.len() > 1 {
+        let query_lower = request.query.to_lowercase();
+        let exact_match_count = all_results
+            .iter()
+            .filter(|r| r.name.to_lowercase() == query_lower)
+            .count();
+
+        // If exactly one item has an exact name match, filter to just that item
+        if exact_match_count == 1 {
+            all_results.retain(|r| r.name.to_lowercase() == query_lower);
+        } else if exact_match_count == 0 {
+            // No exact matches - check if the query looks like a specific identifier
+            // (CamelCase or contains numbers) that should match exactly
+            let looks_like_specific_name = query_lower.chars().any(|c| c.is_ascii_digit())
+                || request.query.chars().any(|c| c.is_uppercase());
+
+            if looks_like_specific_name {
+                // Query looks like a specific identifier but no exact match exists
+                // Treat as "not found" rather than showing unrelated partial matches
+                all_results.clear();
+            }
+        }
+        // If 2+ exact matches, fall through to normal disambiguation
+    }
+
     if all_results.is_empty() {
         let mut error_msg = format!(
             "No items found matching '{}'{}",
@@ -290,32 +329,26 @@ pub async fn handle_inspect_item(
         .or(result.source_crate.as_ref())
         .ok_or_else(|| "No crate information for matched item".to_string())?;
 
-    let is_workspace_member = workspace_ctx.members.contains(&crate_name.to_string());
-
-    let version = workspace_ctx.get_version(crate_name);
-
-    let doc = get_docs(
-        crate_name,
-        version,
-        &workspace_root,
-        is_workspace_member,
-        cargo_lock_path.as_deref(),
-    )
-    .await
-    .map_err(|e| format!("Failed to load documentation for '{}': {}", crate_name, e))?;
-
+    // Get the item directly from the already-loaded documentation via QueryContext
+    // This avoids reloading docs which would fail in isolated test environments
     let item_id = result.id.as_ref().ok_or_else(|| {
         format!(
             "Item '{}' ({}) at '{}' has no ID in search results",
             result.name, result.kind, result.path
         )
     })?;
-    let item = doc.get(&query_ctx, item_id).ok_or_else(|| {
-        format!(
-            "Item '{}' ({}) found at '{}' but documentation not loaded",
-            result.name, result.kind, result.path
-        )
-    })?;
+
+    // Try to get the item from the query context's cache (already loaded during search)
+    let item = query_ctx
+        .load_crate(crate_name)
+        .ok()
+        .and_then(|crate_index| crate_index.get(&query_ctx, item_id))
+        .ok_or_else(|| {
+            format!(
+                "Item '{}' ({}) found at '{}' but documentation not loaded",
+                result.name, result.kind, result.path
+            )
+        })?;
 
     // Skip impl blocks (shouldn't happen, but safeguard)
     if matches!(item.inner(), ItemEnum::Impl(_)) {

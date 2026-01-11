@@ -194,8 +194,14 @@ impl TermBuilder {
         // Recurse into children
         match item.inner() {
             ItemEnum::Module(_) | ItemEnum::Enum(_) => {
-                for child in item.children().build() {
-                    self.recurse(child, &new_path, true);
+                // Use include_use() to also get re-exports as Use items
+                for child in item.children().include_use().build() {
+                    if let ItemEnum::Use(use_item) = child.inner() {
+                        // Index re-exports under their public name
+                        self.index_reexport(child, use_item, &new_path);
+                    } else {
+                        self.recurse(child, &new_path, true);
+                    }
                 }
             }
             ItemEnum::Struct(_) | ItemEnum::Union(_) | ItemEnum::Trait(_) => {
@@ -205,6 +211,51 @@ impl TermBuilder {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Index a re-export item under its public name.
+    ///
+    /// This ensures that `pub use other::Thing` makes `Thing` searchable
+    /// under the re-exporting module's namespace.
+    fn index_reexport(
+        &mut self,
+        use_ref: ItemRef<'_, Item>,
+        use_item: &rustdoc_types::Use,
+        path: &[u32],
+    ) {
+        // Skip glob imports - they're expanded by the iterator
+        if use_item.is_glob {
+            return;
+        }
+
+        let id_num = use_ref.id.0;
+        let crate_id = use_ref.crate_index().root().0 as u64;
+        let doc_id = (crate_id, id_num);
+
+        // Create path including this re-export
+        let mut reexport_path = path.to_vec();
+        reexport_path.push(id_num);
+
+        // Track path to this re-export
+        self.shortest_paths
+            .entry(doc_id)
+            .or_insert_with(|| reexport_path);
+
+        // Index the re-export name (e.g., "Serialize" from `pub use serde_core::Serialize`)
+        self.add_terms(&use_item.name, doc_id, 2.0);
+
+        // Try to resolve the target to get its documentation
+        let target = use_item
+            .id
+            .and_then(|id| use_ref.get(&id))
+            .or_else(|| use_ref.query().resolve_path(&use_item.source, &mut vec![]));
+
+        if let Some(target_item) = target {
+            // Index target's documentation under the re-export's identity
+            if let Some(docs) = target_item.comment() {
+                self.add_terms(docs, doc_id, 1.0);
+            }
         }
     }
 }

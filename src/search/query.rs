@@ -121,11 +121,18 @@ pub fn resolve_crate_from_path(path: &mut QueryPath, known_crates: &[String]) ->
     }
 
     let first = &path.path_components[0];
-    if known_crates.iter().any(|c| c == first) {
+    // Normalize by replacing hyphens with underscores for comparison
+    // (Rust allows both `serde-json` and `serde_json` to refer to the same crate)
+    let first_normalized = first.replace('-', "_");
+
+    if let Some(matched_crate) = known_crates
+        .iter()
+        .find(|c| c.replace('-', "_") == first_normalized)
+    {
         // First component matches a known crate
-        let crate_name = path.path_components.remove(0);
-        path.crate_name = Some(crate_name.clone());
-        Some(crate_name)
+        let _removed = path.path_components.remove(0);
+        path.crate_name = Some(matched_crate.clone());
+        Some(matched_crate.clone())
     } else {
         None
     }
@@ -204,7 +211,8 @@ impl QueryContext {
 
     /// Load a crate's documentation by name, using the cache if available.
     ///
-    /// Automatically generates documentation if it doesn't exist or is stale.
+    /// Attempts to load existing documentation first. If not found and the environment
+    /// supports doc generation (has Cargo.toml, source files, etc.), generates docs.
     /// Returns a reference bound to the lifetime of this QueryContext.
     pub fn load_crate(&self, crate_name: &str) -> Result<&CrateIndex, LoadError> {
         // Check cache first and return reference with proper lifetime
@@ -224,24 +232,29 @@ impl QueryContext {
             .join("target/doc")
             .join(format!("{}.json", normalized_name));
 
-        // Determine if this is a workspace member or external dependency
-        let is_workspace_member = self.workspace.members.contains(&crate_name.to_string());
-        let version = self.workspace.get_version(crate_name);
-
-        // Find Cargo.lock path
-        let cargo_lock_path = self.workspace.root.join("Cargo.lock");
-        let cargo_lock_path = if cargo_lock_path.exists() {
-            Some(cargo_lock_path)
-        } else {
-            None
-        };
-
-        // If documentation doesn't exist or needs regeneration, generate it
+        // If documentation doesn't exist, check if we can generate it
         if !doc_path.exists() {
+            // Check if we have the minimum requirements to generate docs
+            if !self.can_generate_docs(crate_name) {
+                tracing::debug!(
+                    "Cannot generate docs for '{}': environment not suitable",
+                    crate_name
+                );
+                return Err(LoadError::NotFound {
+                    crate_name: crate_name.to_string(),
+                });
+            }
+
             tracing::info!(
                 "Documentation not found for '{}', generating...",
                 crate_name
             );
+
+            let is_workspace_member = self.workspace.members.contains(&crate_name.to_string());
+            let version = self.workspace.get_version(crate_name);
+
+            let cargo_lock_path = self.workspace.root.join("Cargo.lock");
+            let cargo_lock_path = cargo_lock_path.exists().then_some(cargo_lock_path);
 
             // Use block_in_place to allow blocking within async context
             let result = tokio::task::block_in_place(|| {
@@ -257,14 +270,21 @@ impl QueryContext {
                 })
             });
 
-            // Handle generation errors
             if let Err(e) = result {
                 tracing::error!("Failed to generate docs for '{}': {}", crate_name, e);
-                return Err(LoadError::ParseError {
+                return Err(LoadError::GenerationFailed {
                     crate_name: crate_name.to_string(),
-                    error: format!("Failed to generate documentation: {}", e),
+                    error: e.to_string(),
                 });
             }
+        }
+
+        // Verify the file now exists (generation might have failed silently)
+        if !doc_path.exists() {
+            return Err(LoadError::NotFoundAt {
+                crate_name: crate_name.to_string(),
+                path: doc_path,
+            });
         }
 
         // Load the documentation (either existing or just generated)
@@ -276,20 +296,56 @@ impl QueryContext {
             }
         })?;
 
-        // Allocate in arena and store Send-safe pointer in cache
+        Ok(self.cache_crate_index(crate_name, crate_index))
+    }
+
+    /// Allocate a CrateIndex in the arena and cache it for future lookups.
+    fn cache_crate_index(&self, crate_name: &str, crate_index: CrateIndex) -> &CrateIndex {
         let allocated: &CrateIndex = self.arena.alloc(crate_index);
         let arena_ptr = ArenaPtr::new(allocated);
-
         self.doc_cache
             .borrow_mut()
             .insert(crate_name.to_string(), arena_ptr);
+        allocated
+    }
 
-        // Return reference bound to self's lifetime
-        Ok(allocated)
+    /// Check if we have the minimum requirements to generate documentation.
+    ///
+    /// This guards against attempting doc generation in isolated test environments
+    /// or read-only filesystems where it would fail.
+    fn can_generate_docs(&self, crate_name: &str) -> bool {
+        let cargo_toml = self.workspace.root.join("Cargo.toml");
+
+        // Must have Cargo.toml
+        if !cargo_toml.exists() {
+            tracing::debug!(
+                "Cannot generate docs for '{}': no Cargo.toml at {:?}",
+                crate_name,
+                self.workspace.root
+            );
+            return false;
+        }
+
+        // For workspace members, check that source directory exists
+        if self.workspace.members.contains(&crate_name.to_string()) {
+            let src_dir = self.workspace.root.join("src");
+            if !src_dir.exists() {
+                tracing::debug!(
+                    "Cannot generate docs for '{}': no src/ directory",
+                    crate_name
+                );
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Resolve a path like "crate_name::module::Item" to an ItemRef.
     /// Populates suggestions if the path cannot be resolved.
+    ///
+    /// This method supports cross-crate resolution by discovering crates
+    /// from existing JSON files even if they're not in the workspace's known crates.
     pub fn resolve_path<'a>(
         &'a self,
         path: &str,
@@ -302,8 +358,8 @@ impl QueryContext {
             (path, None)
         };
 
-        // Load the crate
-        let crate_index = match self.load_crate(crate_name) {
+        // Load the crate with discovery (tries normal load, then discovers from JSON files)
+        let crate_index = match self.load_crate_with_discovery(crate_name) {
             Ok(index) => index,
             Err(_) => {
                 // Generate suggestions for available crates
@@ -333,6 +389,49 @@ impl QueryContext {
         } else {
             Some(item)
         }
+    }
+
+    /// Load a crate, discovering it from existing doc files if not in known crates.
+    ///
+    /// This is useful for loading crates like `serde_core` that are internal
+    /// dependencies of `serde` but not directly listed in the workspace's dependencies.
+    pub fn load_crate_with_discovery(&self, crate_name: &str) -> Result<&CrateIndex, LoadError> {
+        // First try normal loading (checks cache, generates if needed)
+        match self.load_crate(crate_name) {
+            Ok(index) => return Ok(index),
+            Err(LoadError::NotFound { .. }) => {
+                // Fall through to discovery
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Discovery: Check if a JSON file exists even though crate isn't in workspace
+        let normalized_name = crate_name.replace('-', "_");
+        let doc_path = self
+            .workspace
+            .root
+            .join("target/doc")
+            .join(format!("{}.json", normalized_name));
+
+        if doc_path.exists() {
+            tracing::debug!(
+                "Discovered undeclared crate '{}' from existing JSON at {:?}",
+                crate_name,
+                doc_path
+            );
+
+            // Load directly from the JSON file without trying to regenerate
+            let crate_index = CrateIndex::load(&doc_path).map_err(|e| LoadError::ParseError {
+                crate_name: crate_name.to_string(),
+                error: e.to_string(),
+            })?;
+
+            return Ok(self.cache_crate_index(crate_name, crate_index));
+        }
+
+        Err(LoadError::NotFound {
+            crate_name: crate_name.to_string(),
+        })
     }
 
     /// Recursively traverse the module tree to find an item by path.

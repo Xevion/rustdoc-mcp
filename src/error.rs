@@ -11,8 +11,12 @@ pub type Result<T> = anyhow::Result<T>;
 /// Error returned when loading crate documentation fails.
 #[derive(Debug, Clone)]
 pub enum LoadError {
+    /// Crate documentation not found and cannot be generated.
+    NotFound { crate_name: String },
     /// Documentation file not found at the expected path.
-    NotFound { crate_name: String, path: PathBuf },
+    NotFoundAt { crate_name: String, path: PathBuf },
+    /// Failed to generate documentation (e.g., rustdoc command failed).
+    GenerationFailed { crate_name: String, error: String },
     /// Failed to load or parse the documentation file.
     ParseError { crate_name: String, error: String },
 }
@@ -20,12 +24,22 @@ pub enum LoadError {
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound { crate_name, path } => {
+            Self::NotFound { crate_name } => {
+                write!(f, "Documentation not found for '{}'", crate_name)
+            }
+            Self::NotFoundAt { crate_name, path } => {
                 write!(
                     f,
                     "Documentation not found for '{}' at {}",
                     crate_name,
                     path.display()
+                )
+            }
+            Self::GenerationFailed { crate_name, error } => {
+                write!(
+                    f,
+                    "Failed to generate documentation for '{}': {}",
+                    crate_name, error
                 )
             }
             Self::ParseError { crate_name, error } => {

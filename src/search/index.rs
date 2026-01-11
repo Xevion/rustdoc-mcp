@@ -6,7 +6,8 @@ use rustdoc_types::Item;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path, time::SystemTime};
 
-use super::tokenize::{TermBuilder, hash_term};
+use super::tokenize::{TermBuilder, hash_term, tokenize_and_stem};
+use rust_stemmers::{Algorithm, Stemmer};
 
 /// Term hash for fast lookup
 type TermHash = u64;
@@ -28,19 +29,39 @@ impl InvertedIndex {
 
     /// Searches for items matching the query term using TF-IDF scoring.
     /// Returns item ID paths sorted by relevance score (highest first).
+    ///
+    /// The query is tokenized and stemmed just like indexed terms, so:
+    /// - "BackgroundWorker" matches items with "background", "worker", or "backgroundwork"
+    /// - CamelCase, snake_case, and hyphen-case are all handled
     pub fn search(&self, query: &str, limit: usize) -> Vec<(Vec<u32>, f32)> {
-        let term_hash = hash_term(query);
+        let stemmer = Stemmer::create(Algorithm::English);
+        let tokens = tokenize_and_stem(query, &stemmer);
 
-        self.terms
-            .get(&term_hash)
-            .map(|results| {
-                results
-                    .iter()
-                    .take(limit)
-                    .map(|(doc_idx, score)| (self.ids[*doc_idx].clone(), *score))
-                    .collect()
-            })
-            .unwrap_or_default()
+        if tokens.is_empty() {
+            return vec![];
+        }
+
+        // Collect results from all tokens, combining scores for documents that match multiple
+        let mut combined_scores: HashMap<usize, f32> = HashMap::new();
+
+        for token in &tokens {
+            let term_hash = hash_term(token);
+            if let Some(results) = self.terms.get(&term_hash) {
+                for (doc_idx, score) in results {
+                    *combined_scores.entry(*doc_idx).or_insert(0.0) += score;
+                }
+            }
+        }
+
+        // Sort by combined score descending
+        let mut results: Vec<_> = combined_scores.into_iter().collect();
+        results.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+
+        results
+            .into_iter()
+            .take(limit)
+            .map(|(doc_idx, score)| (self.ids[doc_idx].clone(), score))
+            .collect()
     }
 
     /// Get the number of unique terms in the index

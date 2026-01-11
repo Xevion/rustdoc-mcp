@@ -161,11 +161,31 @@ impl<'a, T> Iterator for IdIterator<'a, T> {
                         return Some(item);
                     }
 
-                    // Resolve the re-export target
+                    // Try to resolve the re-export target
+                    // 1. Try same-crate lookup by ID
                     let mut source_item = use_item
                         .id
-                        .and_then(|id| item.crate_index().get(item.query(), &id))
-                        .or_else(|| item.query().resolve_path(&use_item.source, &mut vec![]))?;
+                        .and_then(|id| item.crate_index().get(item.query(), &id));
+
+                    // 2. If same-crate failed, try cross-crate resolution
+                    if source_item.is_none() {
+                        source_item = self.resolve_cross_crate_reexport(use_item, &item);
+                    }
+
+                    // 3. Final fallback: resolve the full path (now with discovery)
+                    if source_item.is_none() {
+                        source_item = item.query().resolve_path(&use_item.source, &mut vec![]);
+                    }
+
+                    let Some(mut source_item) = source_item else {
+                        // Log for debugging but don't fail - continue to next item
+                        tracing::trace!(
+                            "Could not resolve re-export: {} -> {}",
+                            use_item.name,
+                            use_item.source
+                        );
+                        continue;
+                    };
 
                     // Handle glob imports
                     if use_item.is_glob {
@@ -200,6 +220,39 @@ impl<'a, T> Iterator for IdIterator<'a, T> {
                 return None;
             }
         }
+    }
+}
+
+impl<'a, T> IdIterator<'a, T> {
+    /// Attempt to resolve a re-export that points to an external crate.
+    ///
+    /// This handles cases like `pub use serde_core::Serialize` in `serde` crate,
+    /// where the source path points to a different crate than the current one.
+    fn resolve_cross_crate_reexport(
+        &self,
+        use_item: &Use,
+        parent_item: &ItemRef<'a, Item>,
+    ) -> Option<ItemRef<'a, Item>> {
+        // Extract crate name from source path (e.g., "serde_core::ser::Serialize" -> "serde_core")
+        let source_crate = use_item.source.split("::").next()?;
+
+        // Skip if it looks like we're already in the right crate (not a cross-crate export)
+        if source_crate == parent_item.crate_index().name() {
+            return None;
+        }
+
+        // Load external crate into cache (we discard the reference since resolve_path
+        // will retrieve it from cache and return an ItemRef with the correct lifetime)
+        parent_item
+            .query()
+            .load_crate_with_discovery(source_crate)
+            .ok()?;
+
+        // Now try to resolve the path within the external crate
+        // The path should work since we've loaded the external crate
+        parent_item
+            .query()
+            .resolve_path(&use_item.source, &mut vec![])
     }
 }
 

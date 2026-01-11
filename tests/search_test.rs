@@ -9,7 +9,6 @@ use rustdoc_mcp::tools::search::{SearchRequest, handle_search};
 // These items ARE indexed and should work.
 
 /// Test: Search finds QueryContext struct.
-/// This is one of the items that currently works.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_querycontext(isolated_workspace: IsolatedWorkspace) {
@@ -77,11 +76,7 @@ async fn search_finds_crateorigin(isolated_workspace: IsolatedWorkspace) {
     );
 }
 
-// --- TDD Tests: Broken Search (expected to FAIL) ---
-// These tests document known bugs. They will pass once the bugs are fixed.
-
-/// Test: Search should find TraitIterator struct.
-/// BUG: This item exists in the crate but is not indexed.
+/// Test: Search finds TraitIterator struct.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_traititerator(isolated_workspace: IsolatedWorkspace) {
@@ -107,8 +102,7 @@ async fn search_finds_traititerator(isolated_workspace: IsolatedWorkspace) {
     );
 }
 
-/// Test: Search should find BackgroundWorker struct.
-/// BUG: This is a public export but not indexed.
+/// Test: Search finds BackgroundWorker struct (public export).
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_backgroundworker(isolated_workspace: IsolatedWorkspace) {
@@ -134,8 +128,7 @@ async fn search_finds_backgroundworker(isolated_workspace: IsolatedWorkspace) {
     );
 }
 
-/// Test: Search should find TypeFormatter trait.
-/// BUG: The only trait in the crate but not indexed.
+/// Test: Search finds TypeFormatter trait.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_typeformatter_trait(isolated_workspace: IsolatedWorkspace) {
@@ -160,8 +153,7 @@ async fn search_finds_typeformatter_trait(isolated_workspace: IsolatedWorkspace)
     );
 }
 
-/// Test: Search should find the 'cache' module.
-/// BUG: Module names are not searchable.
+/// Test: Search finds the 'cache' module.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_module_cache(isolated_workspace: IsolatedWorkspace) {
@@ -186,8 +178,7 @@ async fn search_finds_module_cache(isolated_workspace: IsolatedWorkspace) {
     );
 }
 
-/// Test: Search should find ItemRef struct.
-/// BUG: Another public export that's not indexed.
+/// Test: Search finds ItemRef struct (public export).
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_itemref(isolated_workspace: IsolatedWorkspace) {
@@ -209,11 +200,7 @@ async fn search_finds_itemref(isolated_workspace: IsolatedWorkspace) {
     check!(output.contains("ItemRef"), "Should find ItemRef in results");
 }
 
-// --- TDD Tests: Serde Crate Search (expected to FAIL) ---
-// serde.json contains re-exports to serde_core; cross-crate following not implemented.
-
-/// Test: Search should find Serialize trait in serde.
-/// BUG: Core serde traits are not indexed.
+/// Test: Search finds Serialize trait in serde (via cross-crate re-export resolution).
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_serde_serialize(isolated_workspace_with_serde: IsolatedWorkspace) {
@@ -238,8 +225,7 @@ async fn search_finds_serde_serialize(isolated_workspace_with_serde: IsolatedWor
     );
 }
 
-/// Test: Search should find Deserialize trait in serde.
-/// BUG: Core serde traits are not indexed.
+/// Test: Search finds Deserialize trait in serde (via cross-crate re-export resolution).
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_serde_deserialize(isolated_workspace_with_serde: IsolatedWorkspace) {
@@ -264,7 +250,7 @@ async fn search_finds_serde_deserialize(isolated_workspace_with_serde: IsolatedW
     );
 }
 
-/// Test: Search should find Deserializer trait in serde.
+/// Test: Search finds Deserializer trait in serde.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn search_finds_serde_deserializer(isolated_workspace_with_serde: IsolatedWorkspace) {
