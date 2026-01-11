@@ -21,7 +21,7 @@ use std::{
 
 /// Represents a parsed item path like `std::vec::Vec` or `MyStruct`
 #[derive(Debug, Clone)]
-pub struct QueryPath {
+pub(crate) struct QueryPath {
     /// The crate name if explicitly specified or resolved
     pub crate_name: Option<CrateName>,
     /// Path components (modules and item name)
@@ -29,34 +29,9 @@ pub struct QueryPath {
 }
 
 impl QueryPath {
-    /// Get the final item name (last component)
-    pub fn item_name(&self) -> &str {
-        self.path_components
-            .last()
-            .expect("QueryPath must have at least one component")
-    }
-
-    /// Get the module path without the item name
-    pub fn module_path(&self) -> Option<String> {
-        if self.path_components.len() > 1 {
-            Some(self.path_components[..self.path_components.len() - 1].join("::"))
-        } else {
-            None
-        }
-    }
-
     /// Get the full path including module and item
-    pub fn full_path(&self) -> String {
+    pub(crate) fn full_path(&self) -> String {
         self.path_components.join("::")
-    }
-
-    /// Get the fully qualified path including crate name
-    pub fn qualified_path(&self) -> String {
-        if let Some(ref crate_name) = self.crate_name {
-            format!("{}::{}", crate_name, self.full_path())
-        } else {
-            self.full_path()
-        }
     }
 }
 
@@ -68,7 +43,7 @@ impl QueryPath {
 /// - `collections::HashMap` → path_components=["collections", "HashMap"]
 ///
 /// The crate name is resolved later with context knowledge of available crates
-pub fn parse_item_path(query: &str) -> QueryPath {
+pub(crate) fn parse_item_path(query: &str) -> QueryPath {
     let parts: Vec<String> = query
         .split("::")
         .map(|s| s.trim().to_string())
@@ -95,7 +70,7 @@ pub fn parse_item_path(query: &str) -> QueryPath {
 /// and removed from the path components.
 ///
 /// Returns the resolved crate name if found.
-pub fn resolve_crate_from_path(
+pub(crate) fn resolve_crate_from_path(
     path: &mut QueryPath,
     known_crates: &[CrateName],
 ) -> Option<CrateName> {
@@ -553,55 +528,5 @@ impl<'a> PathSuggestion<'a> {
     /// Get the relevance score (0.0 to 1.0, higher is better).
     pub fn score(&self) -> f64 {
         self.score
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use assert2::check;
-    use rstest::rstest;
-
-    #[rstest]
-    #[case("Vec", "Vec", None, "Vec")]
-    #[case("std::vec::Vec", "Vec", Some("std::vec"), "std::vec::Vec")]
-    fn test_parse_item_path(
-        #[case] input: &str,
-        #[case] expected_item: &str,
-        #[case] expected_module: Option<&str>,
-        #[case] expected_full: &str,
-    ) {
-        let path = parse_item_path(input);
-        check!(path.item_name() == expected_item);
-        check!(path.module_path() == expected_module.map(String::from));
-        check!(path.full_path() == expected_full);
-        check!(path.crate_name.is_none());
-    }
-
-    #[rstest]
-    #[case("std::vec::Vec", &["std", "tokio"], Some("std"), "Vec", Some("vec"))]
-    #[case("collections::HashMap", &["std", "tokio"], None, "HashMap", Some("collections"))]
-    fn test_resolve_crate_from_path(
-        #[case] input: &str,
-        #[case] known_crates: &[&str],
-        #[case] expected_crate: Option<&str>,
-        #[case] expected_item: &str,
-        #[case] expected_module: Option<&str>,
-    ) {
-        let mut path = parse_item_path(input);
-        let known_crates_vec: Vec<CrateName> = known_crates
-            .iter()
-            .map(|s| CrateName::new_unchecked(*s))
-            .collect();
-
-        let crate_name = resolve_crate_from_path(&mut path, &known_crates_vec);
-
-        check!(crate_name == expected_crate.map(CrateName::new_unchecked));
-        check!(path.crate_name == expected_crate.map(CrateName::new_unchecked));
-        check!(path.item_name() == expected_item);
-
-        if expected_crate.is_some() {
-            check!(path.module_path() == expected_module.map(String::from));
-        }
     }
 }

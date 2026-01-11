@@ -4,17 +4,18 @@
 //! including tokenization, indexing, scoring, and query resolution.
 
 // Module declarations
-mod index;
-pub mod query;
-pub mod rustdoc;
-mod scoring;
-mod tokenize;
+pub(crate) mod index;
+pub(crate) mod query;
+pub(crate) mod rustdoc;
+pub(crate) mod scoring;
+pub(crate) mod tokenize;
 
-// Re-exports for public API
-pub use index::*;
-pub use query::*;
-pub use rustdoc::{
-    CrateIndex, ItemKind, TraitImplInfo, item_enum_to_kind, item_kind_str, matches_kind,
-};
-pub use scoring::*;
-pub use tokenize::*;
+// Public re-exports (used via lib.rs)
+pub use query::QueryContext;
+pub use rustdoc::ItemKind;
+
+// Internal re-exports
+pub(crate) use index::{DetailedSearchResult, SearchMatch, TermIndex};
+pub(crate) use query::{parse_item_path, resolve_crate_from_path};
+pub(crate) use rustdoc::{CrateIndex, item_enum_to_kind, item_kind_str, matches_kind};
+pub(crate) use scoring::path_canonicality_score;

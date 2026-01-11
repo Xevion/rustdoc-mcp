@@ -16,7 +16,7 @@ const MIN_TOKEN_LENGTH: usize = 1;
 
 /// Common English stop words to filter out from indexing.
 /// These high-frequency words add little value to search relevance.
-pub const STOP_WORDS: &[&str] = &[
+pub(crate) const STOP_WORDS: &[&str] = &[
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "he", "in", "is", "it",
     "its", "of", "on", "that", "the", "to", "was", "will", "with",
 ];
@@ -28,7 +28,7 @@ type DocId = (u64, u32);
 type TermHash = u64;
 
 /// Builder for accumulating term frequencies before TF-IDF finalization.
-pub struct TermBuilder {
+pub(crate) struct TermBuilder {
     /// Flat map from (term_hash, doc_id) → raw TF score
     term_docs: HashMap<(TermHash, DocId), f32>,
     /// Map from doc_id to id_path (sequence of u32 IDs from crate root to item)
@@ -82,7 +82,7 @@ impl TermBuilder {
     /// Calculates IDF scores and produces the final searchable index.
     /// Uses formula: TF-IDF = (1 + ln(tf_normalized)) * ln(total_docs / doc_freq),
     /// where tf_normalized = tf / doc_length for length normalization.
-    pub fn finalize(self) -> InvertedIndex {
+    pub(crate) fn finalize(self) -> InvertedIndex {
         let start = std::time::Instant::now();
         let total_docs = self.shortest_paths.len() as f32;
 
@@ -162,7 +162,7 @@ impl TermBuilder {
     }
 
     /// Recursively index an item and its children.
-    pub fn recurse(&mut self, item: ItemRef<'_, Item>, path: &[u32], track_path: bool) {
+    pub(crate) fn recurse(&mut self, item: ItemRef<'_, Item>, path: &[u32], track_path: bool) {
         let id_num = item.id.0;
 
         let mut new_path = path.to_vec();
@@ -272,7 +272,7 @@ impl TermBuilder {
 /// - `subword_start`: Start of the current sub-component (e.g., "Server")
 ///
 /// This allows extracting both individual components and the full compound term.
-pub fn tokenize_and_stem(text: &str, stemmer: &Stemmer) -> Vec<String> {
+pub(crate) fn tokenize_and_stem(text: &str, stemmer: &Stemmer) -> Vec<String> {
     let mut tokens = vec![];
 
     // State machine variables
@@ -351,7 +351,7 @@ pub fn tokenize_and_stem(text: &str, stemmer: &Stemmer) -> Vec<String> {
 }
 
 /// Add a token using proper stemming algorithm, filtering out stop words.
-pub fn index_token(token: &str, tokens: &mut Vec<String>, stemmer: &Stemmer) {
+pub(crate) fn index_token(token: &str, tokens: &mut Vec<String>, stemmer: &Stemmer) {
     let lowercase = token.to_lowercase();
 
     // Skip stop words
@@ -364,7 +364,7 @@ pub fn index_token(token: &str, tokens: &mut Vec<String>, stemmer: &Stemmer) {
 }
 
 /// Hashes a term for fast lookup (case-insensitive).
-pub fn hash_term(term: &str) -> u64 {
+pub(crate) fn hash_term(term: &str) -> u64 {
     let mut hasher = AHasher::default();
     term.to_lowercase().hash(&mut hasher);
     hasher.finish()

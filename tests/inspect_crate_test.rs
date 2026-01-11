@@ -1,6 +1,6 @@
 mod common;
 
-use assert2::check;
+use assert2::{check, let_assert};
 use common::{IsolatedWorkspace, isolated_workspace, isolated_workspace_with_serde};
 use rstest::rstest;
 use rustdoc_mcp::DetailLevel;
@@ -17,10 +17,10 @@ async fn inspect_crate_summary_lists_local(isolated_workspace: IsolatedWorkspace
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
-    check!(result.is_ok(), "Should list all crates: {:?}", result);
-
-    let output = result.unwrap();
+    let_assert!(
+        Ok(output) = handle_inspect_crate(&isolated_workspace.state, request).await,
+        "Should list all crates"
+    );
     check!(
         output.contains("rustdoc-mcp"),
         "Should list rustdoc-mcp crate: {}",
@@ -37,10 +37,9 @@ async fn inspect_crate_summary_lists_deps(isolated_workspace_with_serde: Isolate
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(
+        Ok(output) = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await
+    );
     check!(
         output.contains("serde"),
         "Should list serde dependency: {}",
@@ -60,10 +59,10 @@ async fn inspect_crate_shows_modules(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
-    check!(result.is_ok(), "Should inspect rustdoc-mcp: {:?}", result);
-
-    let output = result.unwrap();
+    let_assert!(
+        Ok(output) = handle_inspect_crate(&isolated_workspace.state, request).await,
+        "Should inspect rustdoc-mcp"
+    );
     // Should list top-level modules
     check!(
         output.contains("cache"),
@@ -96,10 +95,7 @@ async fn inspect_crate_shows_exports(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_inspect_crate(&isolated_workspace.state, request).await);
     // High detail should show common exports
     check!(
         output.contains("Exports") || output.contains("Types") || output.contains("Functions"),
@@ -117,10 +113,7 @@ async fn inspect_crate_shows_item_counts(isolated_workspace: IsolatedWorkspace) 
         detail_level: DetailLevel::Low,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_inspect_crate(&isolated_workspace.state, request).await);
     // Should show counts for different item types
     check!(
         output.contains("Struct") || output.contains("struct"),
@@ -143,10 +136,10 @@ async fn inspect_crate_external_dep(isolated_workspace_with_serde: IsolatedWorks
         detail_level: DetailLevel::Medium,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await;
-    check!(result.is_ok(), "Should inspect serde: {:?}", result);
-
-    let output = result.unwrap();
+    let_assert!(
+        Ok(output) = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await,
+        "Should inspect serde"
+    );
     check!(
         output.contains("serde"),
         "Should show serde info: {}",
@@ -163,10 +156,10 @@ async fn inspect_crate_serde_json(isolated_workspace_with_serde: IsolatedWorkspa
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await;
-    check!(result.is_ok(), "Should inspect serde_json: {:?}", result);
-
-    let output = result.unwrap();
+    let_assert!(
+        Ok(output) = handle_inspect_crate(&isolated_workspace_with_serde.state, request).await,
+        "Should inspect serde_json"
+    );
     check!(
         output.contains("serde_json"),
         "Should show crate name: {}",
@@ -207,10 +200,7 @@ async fn inspect_crate_exports_structure(isolated_workspace: IsolatedWorkspace) 
         detail_level: DetailLevel::High,
     };
 
-    let result = handle_inspect_crate(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_inspect_crate(&isolated_workspace.state, request).await);
 
     // Verify exports section structure
     check!(
@@ -241,8 +231,7 @@ async fn inspect_crate_exports_structure(isolated_workspace: IsolatedWorkspace) 
         output
     );
 
-    // Verify the only trait (TypeFormatter) is visible in the Traits section
-    // (Traits section is small enough to not be truncated)
+    // Verify TypeFormatter trait is visible in the Traits section
     check!(
         output.contains("TypeFormatter"),
         "TypeFormatter trait should be visible: {}",

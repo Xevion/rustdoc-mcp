@@ -1,9 +1,7 @@
 //! Item references and iterators for traversing documentation.
 
-pub mod item_ref;
-pub mod iterator;
+pub(crate) mod item_ref;
+pub(crate) mod iterator;
 
-pub use item_ref::{ItemPath, ItemRef};
-pub use iterator::{
-    ChildIterator, IdIterator, InherentImplIterator, MethodIterator, TraitIterator,
-};
+// Internal re-exports
+pub(crate) use item_ref::{ItemPath, ItemRef};

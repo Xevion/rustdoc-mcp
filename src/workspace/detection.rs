@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 /// 4. Validate that we found a workspace root (not just a package)
 ///
 /// Returns the canonicalized path to the workspace directory, or None if no valid workspace found.
-pub async fn auto_detect_workspace() -> Option<PathBuf> {
+pub(crate) async fn auto_detect_workspace() -> Option<PathBuf> {
     let cwd = match env::current_dir() {
         Ok(dir) => dir,
         Err(e) => {
@@ -306,7 +306,7 @@ pub fn has_workspace_section(cargo_toml: &Path) -> Option<bool> {
 /// - Other paths are returned unchanged
 ///
 /// Returns `Cow::Borrowed` if no expansion needed, `Cow::Owned` if expanded.
-pub fn expand_tilde(path: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn expand_tilde(path: &str) -> std::borrow::Cow<'_, str> {
     use std::borrow::Cow;
 
     if let Some(stripped) = path.strip_prefix("~/") {

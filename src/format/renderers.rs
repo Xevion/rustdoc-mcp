@@ -3,14 +3,14 @@
 //! This module handles the rendering of rustdoc items into human-readable text output,
 //! including documentation formatting, signature display, and detail level control.
 
-use super::{DetailLevel, FormatOptions, TypeFormatter};
-use crate::item::ItemRef;
+use super::{DetailLevel, TypeFormatter};
+use crate::item::item_ref::ItemRef;
 use rustdoc_types::{Item, ItemEnum, ItemKind};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
 /// Render struct output
-pub fn render_struct(
+pub(crate) fn render_struct(
     output: &mut String,
     item: ItemRef<'_, Item>,
     s: &rustdoc_types::Struct,
@@ -72,7 +72,7 @@ pub fn render_struct(
 }
 
 /// Render enum output
-pub fn render_enum(
+pub(crate) fn render_enum(
     output: &mut String,
     item: ItemRef<'_, Item>,
     e: &rustdoc_types::Enum,
@@ -151,7 +151,7 @@ pub fn render_enum(
 }
 
 /// Render function output
-pub fn render_function(
+pub(crate) fn render_function(
     output: &mut String,
     item: ItemRef<'_, Item>,
     _f: &rustdoc_types::Function,
@@ -184,7 +184,7 @@ pub fn render_function(
 }
 
 /// Render trait output
-pub fn render_trait(
+pub(crate) fn render_trait(
     output: &mut String,
     item: ItemRef<'_, Item>,
     t: &rustdoc_types::Trait,
@@ -227,7 +227,7 @@ pub fn render_trait(
 }
 
 /// Render module output
-pub fn render_module(
+pub(crate) fn render_module(
     output: &mut String,
     item: ItemRef<'_, Item>,
     detail_level: DetailLevel,
@@ -344,7 +344,7 @@ pub fn render_module(
 }
 
 /// Render type alias output
-pub fn render_type_alias(
+pub(crate) fn render_type_alias(
     output: &mut String,
     item: ItemRef<'_, Item>,
     ta: &rustdoc_types::TypeAlias,
@@ -372,7 +372,7 @@ pub fn render_type_alias(
 }
 
 /// Render constant output
-pub fn render_constant(
+pub(crate) fn render_constant(
     output: &mut String,
     item: ItemRef<'_, Item>,
     type_: &rustdoc_types::Type,
@@ -400,7 +400,7 @@ pub fn render_constant(
 }
 
 /// Render static output
-pub fn render_static(
+pub(crate) fn render_static(
     output: &mut String,
     item: ItemRef<'_, Item>,
     s: &rustdoc_types::Static,
@@ -434,7 +434,7 @@ pub fn render_static(
 }
 
 /// Generate a signature string for an item
-pub fn render_item_signature<'a>(
+pub(crate) fn render_item_signature<'a>(
     item: crate::item::ItemRef<'a, rustdoc_types::Item>,
 ) -> Option<String> {
     let name = item.name()?;
@@ -470,114 +470,4 @@ pub fn render_item_signature<'a>(
 /// Extract documentation summary (first paragraph) for truncated output
 fn extract_summary(docs: &str) -> String {
     docs.split("\n\n").next().unwrap_or(docs).trim().to_string()
-}
-
-/// Get the documentation to show based on detail level and context
-pub fn render_docs(
-    item: ItemRef<'_, Item>,
-    is_listing: bool,
-    context: &FormatOptions,
-) -> Option<String> {
-    let docs = item.comment()?;
-    if docs.is_empty() {
-        return None;
-    }
-
-    match (context.detail_level(), is_listing) {
-        (DetailLevel::Low, _) => None,
-        (_, true) => {
-            // Listings: first non-empty line + indicator
-            let first_line = docs
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .map(|line| line.trim().to_string())?;
-
-            let total_lines = count_doc_lines(docs);
-            if total_lines > 1 {
-                Some(format!("{} [+{} more lines]", first_line, total_lines - 1))
-            } else {
-                Some(first_line)
-            }
-        }
-        (DetailLevel::High, _) => Some(docs.to_string()),
-        (DetailLevel::Medium, _) => {
-            // Truncate to first paragraph or 16 lines
-            let total_lines = count_doc_lines(docs);
-            let truncated_text = truncate_to_paragraph(docs, 16);
-            let displayed_lines = count_doc_lines(&truncated_text);
-
-            if displayed_lines < total_lines {
-                Some(format!(
-                    "{}\n[+{} lines elided]",
-                    truncated_text,
-                    total_lines - displayed_lines
-                ))
-            } else {
-                Some(truncated_text)
-            }
-        }
-    }
-}
-
-/// Count non-empty lines in documentation
-fn count_doc_lines(docs: &str) -> usize {
-    docs.lines().filter(|line| !line.trim().is_empty()).count()
-}
-
-/// Truncate documentation to the first paragraph or N lines, whichever comes first
-fn truncate_to_paragraph(docs: &str, max_lines: usize) -> String {
-    let mut result = String::new();
-    let mut non_empty_count = 0;
-
-    for line in docs.lines() {
-        let trimmed = line.trim();
-
-        // Check for paragraph break (blank line after content)
-        if trimmed.is_empty() {
-            if non_empty_count > 0 {
-                break;
-            }
-            continue;
-        }
-
-        // Add line
-        if !result.is_empty() {
-            result.push('\n');
-        }
-        result.push_str(line);
-        non_empty_count += 1;
-
-        // Check line limit
-        if non_empty_count >= max_lines {
-            break;
-        }
-    }
-
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use assert2::check;
-
-    #[test]
-    fn test_count_doc_lines() {
-        let docs = "Line 1\n\nLine 2\nLine 3\n\n";
-        check!(count_doc_lines(docs) == 3);
-    }
-
-    #[test]
-    fn test_truncate_to_paragraph_breaks() {
-        let docs = "First paragraph line 1\nFirst paragraph line 2\n\nSecond paragraph";
-        let result = truncate_to_paragraph(docs, 100);
-        check!(result == "First paragraph line 1\nFirst paragraph line 2");
-    }
-
-    #[test]
-    fn test_truncate_to_paragraph_line_limit() {
-        let docs = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
-        let result = truncate_to_paragraph(docs, 3);
-        check!(result == "Line 1\nLine 2\nLine 3");
-    }
 }

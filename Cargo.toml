@@ -24,10 +24,6 @@ bumpalo = "3.19"
 rust-stemmers = "1.2"
 ahash = "0.8"
 rapidfuzz = "0.5"
-
-# Rust syntax processing
-syn = { version = "2", features = ["full", "parsing"] }
-prettyplease = "0.2"
 toml = { version = "0.9", features = ["parse"] }
 
 # File system operations

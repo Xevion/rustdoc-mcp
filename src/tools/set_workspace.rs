@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 ///
 /// Returns a tuple of (canonical_path, workspace_context, changed) where
 /// `changed` indicates whether the workspace was actually changed.
-pub async fn handle_set_workspace(
+pub(crate) async fn handle_set_workspace(
     path: String,
     current_workspace: Option<&Path>,
 ) -> Result<(PathBuf, WorkspaceContext, bool)> {
@@ -145,7 +145,7 @@ pub async fn handle_set_workspace(
 ///
 /// Includes contextual messaging based on whether the workspace changed and what the
 /// previous workspace was.
-pub fn format_response(
+pub(crate) fn format_response(
     path: &Path,
     metadata: &WorkspaceContext,
     old_workspace: Option<&Path>,

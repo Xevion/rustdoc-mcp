@@ -1,6 +1,6 @@
 mod common;
 
-use assert2::check;
+use assert2::{assert, check, let_assert};
 use common::{IsolatedWorkspace, isolated_workspace, isolated_workspace_with_serde, warm_cache};
 use rstest::rstest;
 use rustdoc_mcp::tools::search::{SearchRequest, handle_search};
@@ -18,10 +18,10 @@ async fn search_finds_querycontext(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok(), "Search should succeed: {:?}", result);
-
-    let output = result.unwrap();
+    let_assert!(
+        Ok(output) = handle_search(&isolated_workspace.state, request).await,
+        "Search should succeed"
+    );
     check!(
         output.contains("QueryContext"),
         "Should find QueryContext in results: {}",
@@ -44,10 +44,7 @@ async fn search_finds_servercontext(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         output.contains("ServerContext"),
         "Should find ServerContext: {}",
@@ -65,10 +62,7 @@ async fn search_finds_crateorigin(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         output.contains("CrateOrigin"),
         "Should find CrateOrigin: {}",
@@ -86,10 +80,7 @@ async fn search_finds_traititerator(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
     // Must check for "No results" FIRST - the error message contains the search term
     check!(
         !output.contains("No results found"),
@@ -112,10 +103,7 @@ async fn search_finds_backgroundworker(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
     // Must check for "No results" FIRST - the error message contains the search term
     check!(
         !output.contains("No results found"),
@@ -138,10 +126,7 @@ async fn search_finds_typeformatter_trait(isolated_workspace: IsolatedWorkspace)
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -163,10 +148,7 @@ async fn search_finds_module_cache(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -188,10 +170,7 @@ async fn search_finds_itemref(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -210,10 +189,7 @@ async fn search_finds_serde_serialize(isolated_workspace_with_serde: IsolatedWor
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace_with_serde.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -235,10 +211,7 @@ async fn search_finds_serde_deserialize(isolated_workspace_with_serde: IsolatedW
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace_with_serde.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -260,10 +233,7 @@ async fn search_finds_serde_deserializer(isolated_workspace_with_serde: Isolated
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace_with_serde.state, request).await;
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -280,24 +250,19 @@ async fn search_finds_serde_deserializer(isolated_workspace_with_serde: Isolated
 
 /// Test: Search with fresh index build (no cache).
 /// Uses isolated workspace to ensure no cached index exists.
+#[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn search_with_fresh_index_build() {
-    let workspace = IsolatedWorkspace::new();
-
+async fn search_with_fresh_index_build(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "QueryContext".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
         limit: Some(5),
     };
 
-    let result = handle_search(&workspace.state, request).await;
-    check!(
-        result.is_ok(),
-        "Fresh index search should succeed: {:?}",
-        result
+    let_assert!(
+        Ok(output) = handle_search(&isolated_workspace.state, request).await,
+        "Fresh index search should succeed"
     );
-
-    let output = result.unwrap();
     check!(
         output.contains("QueryContext"),
         "Should find QueryContext with fresh index: {}",
@@ -306,11 +271,12 @@ async fn search_with_fresh_index_build() {
 }
 
 /// Test: Verify isolated workspace has no pre-existing index files.
+#[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn isolated_workspace_has_no_cached_index() {
-    let workspace = IsolatedWorkspace::new();
-
-    let index_path = workspace.root().join("target/doc/rustdoc_mcp.index");
+async fn isolated_workspace_has_no_cached_index(isolated_workspace: IsolatedWorkspace) {
+    let index_path = isolated_workspace
+        .root()
+        .join("target/doc/rustdoc_mcp.index");
     check!(
         !index_path.exists(),
         "Isolated workspace should not have cached index: {:?}",
@@ -334,10 +300,10 @@ async fn search_works_with_warm_cache(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
-    check!(result.is_ok(), "Search should succeed with warm cache");
-
-    let output = result.unwrap();
+    let_assert!(
+        Ok(output) = handle_search(&isolated_workspace.state, request).await,
+        "Search should succeed with warm cache"
+    );
     check!(
         !output.contains("No results found"),
         "Should find results with warm cache: {}",
@@ -357,11 +323,8 @@ async fn search_nonexistent_crate_error(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
     // Should return Ok with a suggestion message, not an Err
-    check!(result.is_ok());
-
-    let output = result.unwrap();
+    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         output.contains("not found") || output.contains("Did you mean"),
         "Should give helpful error for nonexistent crate: {}",
@@ -379,9 +342,8 @@ async fn search_empty_query(isolated_workspace: IsolatedWorkspace) {
         limit: Some(5),
     };
 
-    let result = handle_search(&isolated_workspace.state, request).await;
     // Empty query should not panic
-    check!(result.is_ok());
+    assert!((handle_search(&isolated_workspace.state, request).await).is_ok());
 }
 
 // --- Concurrency Tests ---
@@ -391,16 +353,15 @@ async fn search_empty_query(isolated_workspace: IsolatedWorkspace) {
 ///
 /// This verifies that multiple simultaneous searches can share the same
 /// index without data corruption or race conditions.
+#[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn concurrent_searches_same_crate() {
-    let workspace = IsolatedWorkspace::new();
-
+async fn concurrent_searches_same_crate(isolated_workspace: IsolatedWorkspace) {
     // Spawn multiple concurrent searches
     let mut handles = vec![];
     let queries = ["QueryContext", "ServerContext", "CrateOrigin", "DocState"];
 
     for query in queries {
-        let context = workspace.state.clone();
+        let context = isolated_workspace.state.clone();
         let query = query.to_string();
         handles.push(tokio::spawn(async move {
             let request = SearchRequest {
@@ -424,12 +385,13 @@ async fn concurrent_searches_same_crate() {
 ///
 /// This tests the scenario where multiple searches start before any index
 /// is built, forcing concurrent index construction attempts.
+#[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn concurrent_cold_cache_searches() {
-    let workspace = IsolatedWorkspace::new();
-
+async fn concurrent_cold_cache_searches(isolated_workspace: IsolatedWorkspace) {
     // Verify no index exists yet
-    let index_path = workspace.root().join("target/doc/rustdoc_mcp.index");
+    let index_path = isolated_workspace
+        .root()
+        .join("target/doc/rustdoc_mcp.index");
     check!(
         !index_path.exists(),
         "Should start with cold cache: {:?}",
@@ -439,7 +401,7 @@ async fn concurrent_cold_cache_searches() {
     // Launch many concurrent searches simultaneously
     let mut handles = vec![];
     for i in 0..10 {
-        let context = workspace.state.clone();
+        let context = isolated_workspace.state.clone();
         handles.push(tokio::spawn(async move {
             let request = SearchRequest {
                 query: "QueryContext".to_string(),
@@ -455,8 +417,7 @@ async fn concurrent_cold_cache_searches() {
     let mut success_count = 0;
     for handle in handles {
         let (i, result) = handle.await.expect("Task should not panic");
-        if result.is_ok() {
-            let output = result.unwrap();
+        if let Ok(output) = result {
             check!(
                 output.contains("QueryContext"),
                 "Search {} should find QueryContext",
@@ -477,13 +438,12 @@ async fn concurrent_cold_cache_searches() {
 ///
 /// This simulates a realistic workload where searches and cache warming
 /// happen concurrently.
+#[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn concurrent_mixed_operations() {
-    let workspace = IsolatedWorkspace::new();
-
+async fn concurrent_mixed_operations(isolated_workspace: IsolatedWorkspace) {
     // Start cache warming and searches at the same time
     let warm_handle = {
-        let context = workspace.state.clone();
+        let context = isolated_workspace.state.clone();
         tokio::spawn(async move {
             warm_cache(&context, &["rustdoc-mcp"]).await;
         })
@@ -491,7 +451,7 @@ async fn concurrent_mixed_operations() {
 
     let search_handles: Vec<_> = (0..5)
         .map(|i| {
-            let context = workspace.state.clone();
+            let context = isolated_workspace.state.clone();
             tokio::spawn(async move {
                 // Small delay to interleave with warming
                 tokio::time::sleep(tokio::time::Duration::from_millis(i * 10)).await;

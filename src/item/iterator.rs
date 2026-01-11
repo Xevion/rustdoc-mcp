@@ -257,10 +257,10 @@ impl<'a, T> IdIterator<'a, T> {
 }
 
 /// Iterator for inherent impl blocks (non-trait impls)
-pub struct InherentImplIterator<'a>(ImplIterator<'a>);
+pub(crate) struct InherentImplIterator<'a>(ImplIterator<'a>);
 
 impl<'a> InherentImplIterator<'a> {
-    pub fn new(item: ItemRef<'a, Item>) -> Self {
+    pub(crate) fn new(item: ItemRef<'a, Item>) -> Self {
         Self(ImplIterator::new(item, ImplKind::Inherent))
     }
 }

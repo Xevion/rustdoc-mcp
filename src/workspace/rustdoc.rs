@@ -13,7 +13,7 @@ use tracing::{debug, error, info};
 /// Loads or regenerates rustdoc JSON for a crate using digest-based caching.
 /// Regenerates documentation when source files change (workspace members) or when
 /// the dependency version/checksum changes (external dependencies).
-pub async fn get_docs(
+pub(crate) async fn get_docs(
     crate_name: &CrateName,
     version: Option<&str>,
     workspace_root: &Path,

@@ -15,7 +15,7 @@ type TermHash = u64;
 
 /// A searchable term index with TF-IDF scoring.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InvertedIndex {
+pub(crate) struct InvertedIndex {
     /// Map from term hash to list of (crate_index, tf_idf_score) pairs, sorted by score descending
     terms: HashMap<TermHash, Vec<(usize, f32)>>,
     /// Map from crate_index to id_path (sequence of u32 IDs from root to item)
@@ -34,7 +34,7 @@ impl InvertedIndex {
     /// The query is tokenized and stemmed just like indexed terms, so:
     /// - "BackgroundWorker" matches items with "background", "worker", or "backgroundwork"
     /// - CamelCase, snake_case, and hyphen-case are all handled
-    pub fn search(&self, query: &str, limit: usize) -> Vec<(Vec<u32>, f32)> {
+    pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<(Vec<u32>, f32)> {
         let stemmer = Stemmer::create(Algorithm::English);
         let tokens = tokenize_and_stem(query, &stemmer);
 
@@ -66,33 +66,33 @@ impl InvertedIndex {
     }
 
     /// Get the number of unique terms in the index
-    pub fn term_count(&self) -> usize {
+    pub(crate) fn term_count(&self) -> usize {
         self.terms.len()
     }
 
     /// Get the number of documents in the index
-    pub fn document_count(&self) -> usize {
+    pub(crate) fn document_count(&self) -> usize {
         self.ids.len()
     }
 }
 
 /// Location information for a documentation item.
 #[derive(Debug, Clone)]
-pub struct ItemLocation {
+pub(crate) struct ItemLocation {
     pub crate_name: CrateName,
     pub item_path: Vec<u32>,
 }
 
 /// A search match with item location and relevance ranking.
 #[derive(Debug, Clone)]
-pub struct SearchMatch {
+pub(crate) struct SearchMatch {
     pub item: ItemLocation,
     pub rank: f32,
 }
 
 /// Detailed search result with full item information.
 #[derive(Debug, Clone)]
-pub struct DetailedSearchResult {
+pub(crate) struct DetailedSearchResult {
     pub name: String,
     pub path: String,
     pub kind: String,
@@ -104,7 +104,7 @@ pub struct DetailedSearchResult {
 }
 
 /// A search index for a specific crate.
-pub struct TermIndex {
+pub(crate) struct TermIndex {
     crate_name: CrateName,
     terms: InvertedIndex,
 }
@@ -188,7 +188,7 @@ impl TermIndex {
     ///
     /// This is a blocking wrapper around async cache operations to avoid
     /// Send/Sync issues with QueryContext in async functions.
-    pub fn load_or_build<'a>(
+    pub(crate) fn load_or_build<'a>(
         request: &'a super::query::QueryContext,
         crate_name: &str,
     ) -> Result<Self, Vec<super::query::PathSuggestion<'a>>> {
@@ -206,7 +206,7 @@ impl TermIndex {
     }
 
     /// Searches within this index and returns matches with location and rank.
-    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchMatch> {
+    pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<SearchMatch> {
         self.terms
             .search(query, limit)
             .into_iter()

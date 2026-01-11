@@ -1,3 +1,6 @@
+#![warn(unreachable_pub)]
+#![warn(dead_code)]
+
 pub mod cache;
 pub mod error;
 pub mod format;
@@ -10,16 +13,8 @@ pub mod types;
 pub mod worker;
 pub mod workspace;
 
-pub use cache::Hash;
-pub use error::LoadError;
-pub use format::DetailLevel;
-pub use item::ItemRef;
-pub use search::{
-    CrateIndex, DetailedSearchResult, ItemKind, PathSuggestion, QueryContext, TermIndex,
-    TraitImplInfo,
-};
-pub use server::{ItemServer, inline_schema_for_type};
-pub use stdlib::StdlibDocs;
-pub use types::{CrateName, CrateNameError, TypeKind, Visibility};
-pub use worker::{BackgroundWorker, DocState, spawn_background_worker};
-pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext, expand_tilde};
+pub use format::{DetailLevel, TypeFormatter};
+pub use search::{ItemKind, QueryContext};
+pub use types::CrateName;
+pub use worker::DocState;
+pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};

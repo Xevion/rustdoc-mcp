@@ -37,7 +37,7 @@ pub enum ItemKind {
 }
 
 /// Check if an ItemEnum matches a specific ItemKind.
-pub fn matches_kind(inner: &ItemEnum, kind: ItemKind) -> bool {
+pub(crate) fn matches_kind(inner: &ItemEnum, kind: ItemKind) -> bool {
     matches!(
         (inner, kind),
         (ItemEnum::Module(_), ItemKind::Module)
@@ -52,7 +52,7 @@ pub fn matches_kind(inner: &ItemEnum, kind: ItemKind) -> bool {
 }
 
 /// Convert an ItemEnum to its corresponding rustdoc ItemKind.
-pub fn item_enum_to_kind(inner: &ItemEnum) -> RustdocItemKind {
+pub(crate) fn item_enum_to_kind(inner: &ItemEnum) -> RustdocItemKind {
     match inner {
         ItemEnum::Module(_) => RustdocItemKind::Module,
         ItemEnum::ExternCrate { .. } => RustdocItemKind::ExternCrate,
@@ -90,7 +90,7 @@ pub fn item_enum_to_kind(inner: &ItemEnum) -> RustdocItemKind {
 }
 
 /// Get a string representation of an item's kind.
-pub fn item_kind_str(inner: &ItemEnum) -> &'static str {
+pub(crate) fn item_kind_str(inner: &ItemEnum) -> &'static str {
     match inner {
         ItemEnum::Module(_) => "module",
         ItemEnum::Struct(_) => "struct",
