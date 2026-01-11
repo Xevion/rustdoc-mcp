@@ -5,6 +5,16 @@ default:
 install:
     cargo install --path . --debug
 
+# Clear generated rustdoc data (preserves binaries and caches)
+clear:
+    rm -rf target/doc
+    @echo "Cleared rustdoc data from target/doc/"
+
+# Clear cached search indexes (fixes stale cache issues)
+clear-cache:
+    rm -f target/doc/*.index
+    @echo "Cleared search index cache"
+
 # Run type checking and linting
 check:
     cargo check --workspace --all-targets
@@ -15,6 +25,6 @@ check:
 run:
     cargo run
 
-# Run the tests
+# Run tests in parallel
 test:
     cargo nextest run --no-fail-fast
