@@ -56,7 +56,8 @@ async fn inspect_crate_summary_lists_deps(isolated_workspace_with_serde: Isolate
 async fn inspect_crate_shows_modules(isolated_workspace: IsolatedWorkspace) {
     let request = InspectCrateRequest {
         crate_name: Some("rustdoc-mcp".to_string()),
-        detail_level: DetailLevel::Medium,
+        // Use High to ensure all modules are shown (Medium limits to 10, but we have 11)
+        detail_level: DetailLevel::High,
     };
 
     let result = handle_inspect_crate(&isolated_workspace.state, request).await;
