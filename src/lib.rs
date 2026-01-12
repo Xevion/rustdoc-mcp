@@ -9,6 +9,7 @@ pub mod search;
 pub mod server;
 pub mod stdlib;
 pub mod tools;
+pub mod tracing;
 pub mod types;
 pub mod worker;
 pub mod workspace;

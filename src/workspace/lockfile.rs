@@ -24,6 +24,8 @@ pub async fn parse_cargo_lock(lock_path: &Path) -> Result<HashMap<CrateName, Loc
         .with_context(|| format!("Failed to read Cargo.lock at {}", lock_path.display()))?;
     let lockfile: CargoLock = toml::from_str(&content).context("Failed to parse Cargo.lock")?;
 
+    tracing::debug!(package_count = lockfile.package.len(), "Parsed Cargo.lock");
+
     let mut crates = HashMap::new();
 
     for package in lockfile.package {
@@ -47,6 +49,12 @@ pub async fn parse_cargo_lock(lock_path: &Path) -> Result<HashMap<CrateName, Loc
             },
         );
     }
+
+    tracing::debug!(
+        total_packages = crates.len(),
+        with_checksums = crates.values().filter(|e| e.checksum.is_some()).count(),
+        "Lockfile parsing complete"
+    );
 
     Ok(crates)
 }

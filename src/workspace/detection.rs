@@ -6,7 +6,6 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
 
 /// Automatically detect a workspace starting from the current working directory.
 ///
@@ -21,18 +20,18 @@ pub(crate) async fn auto_detect_workspace() -> Option<PathBuf> {
     let cwd = match env::current_dir() {
         Ok(dir) => dir,
         Err(e) => {
-            debug!("Failed to get current working directory: {}", e);
+            tracing::debug!("Failed to get current working directory: {}", e);
             return None;
         }
     };
 
-    debug!("Starting workspace auto-detection from: {}", cwd.display());
+    tracing::debug!("Starting workspace auto-detection from: {}", cwd.display());
 
     // Find Cargo.toml with all constraints applied
     let cargo_toml_path = find_cargo_toml_with_constraints(&cwd)?;
     let workspace_dir = cargo_toml_path.parent()?.to_path_buf();
 
-    debug!(
+    tracing::debug!(
         "Found Cargo.toml at: {}, validating workspace...",
         cargo_toml_path.display()
     );
@@ -43,11 +42,11 @@ pub(crate) async fn auto_detect_workspace() -> Option<PathBuf> {
     // Canonicalize the path for consistency
     match tokio::fs::canonicalize(&workspace_root).await {
         Ok(canonical) => {
-            info!("✓ Auto-detected workspace: {}", canonical.display());
+            tracing::info!("✓ Auto-detected workspace: {}", canonical.display());
             Some(canonical)
         }
         Err(e) => {
-            warn!(
+            tracing::warn!(
                 "Found workspace at {} but canonicalization failed: {}",
                 workspace_root.display(),
                 e
@@ -72,9 +71,9 @@ pub fn find_cargo_toml_with_constraints(start: &Path) -> Option<PathBuf> {
     let max_depth = if git_root.is_some() { None } else { Some(2) };
 
     if let Some(ref git_root) = git_root {
-        debug!("Git repository detected at: {}", git_root.display());
+        tracing::debug!("Git repository detected at: {}", git_root.display());
     } else {
-        debug!("Not in a Git repository, limiting search to 2 directories up");
+        tracing::debug!("Not in a Git repository, limiting search to 2 directories up");
     }
 
     let mut current = start.to_path_buf();
@@ -84,13 +83,13 @@ pub fn find_cargo_toml_with_constraints(start: &Path) -> Option<PathBuf> {
         // Check for Cargo.toml in current directory
         let cargo_toml = current.join("Cargo.toml");
         if cargo_toml.exists() && !is_at_system_root(&current) {
-            debug!("Found Cargo.toml at: {}", cargo_toml.display());
+            tracing::debug!("Found Cargo.toml at: {}", cargo_toml.display());
             return Some(cargo_toml);
         }
 
         // Check stop conditions
         if is_boundary_directory(&current) {
-            debug!("Hit boundary directory: {}", current.display());
+            tracing::debug!("Hit boundary directory: {}", current.display());
             break;
         }
 
@@ -98,7 +97,7 @@ pub fn find_cargo_toml_with_constraints(start: &Path) -> Option<PathBuf> {
         if let Some(ref git_root) = git_root
             && current == git_root.as_path()
         {
-            debug!("Reached Git repository root, stopping search");
+            tracing::debug!("Reached Git repository root, stopping search");
             break;
         }
 
@@ -106,7 +105,7 @@ pub fn find_cargo_toml_with_constraints(start: &Path) -> Option<PathBuf> {
         if let Some(max) = max_depth
             && depth >= max
         {
-            debug!("Reached maximum search depth of {} directories", max);
+            tracing::debug!("Reached maximum search depth of {} directories", max);
             break;
         }
 
@@ -117,13 +116,13 @@ pub fn find_cargo_toml_with_constraints(start: &Path) -> Option<PathBuf> {
                 depth += 1;
             }
             None => {
-                debug!("Reached filesystem root");
+                tracing::debug!("Reached filesystem root");
                 break;
             }
         }
     }
 
-    debug!("No Cargo.toml found within constraints");
+    tracing::debug!("No Cargo.toml found within constraints");
     None
 }
 
@@ -225,7 +224,7 @@ pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     loop {
         // Check for boundary before checking for Cargo.toml
         if is_boundary_directory(&current) {
-            debug!(
+            tracing::debug!(
                 "Hit boundary directory during workspace search: {}",
                 current.display()
             );
@@ -237,14 +236,14 @@ pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
         if cargo_toml.exists() {
             match has_workspace_section(&cargo_toml) {
                 Some(true) => {
-                    debug!(
+                    tracing::debug!(
                         "Found workspace root with [workspace] section: {}",
                         current.display()
                     );
                     return Some(current);
                 }
                 Some(false) => {
-                    debug!(
+                    tracing::debug!(
                         "Found [package] without [workspace], continuing search upward: {}",
                         current.display()
                     );
@@ -254,7 +253,7 @@ pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
                     }
                 }
                 None => {
-                    debug!(
+                    tracing::debug!(
                         "Failed to parse Cargo.toml at {}, skipping",
                         cargo_toml.display()
                     );
@@ -266,7 +265,7 @@ pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
         match current.parent() {
             Some(parent) => current = parent.to_path_buf(),
             None => {
-                debug!("Reached filesystem root without finding [workspace]");
+                tracing::debug!("Reached filesystem root without finding [workspace]");
                 break;
             }
         }

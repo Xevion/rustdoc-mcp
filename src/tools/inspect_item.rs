@@ -34,6 +34,7 @@ fn default_detail_level() -> DetailLevel {
 
 /// Handles inspect_item requests by resolving paths or searching across crates.
 /// Attempts path resolution first for explicit paths, falls back to fuzzy search if needed.
+#[tracing::instrument(skip_all, fields(query = %request.query))]
 pub async fn handle_inspect_item(
     state: &Arc<DocState>,
     request: InspectItemRequest,
@@ -50,6 +51,7 @@ pub async fn handle_inspect_item(
 
     // If targeting stdlib and stdlib is available, handle it directly
     if targets_stdlib && let Some(stdlib) = state.stdlib() {
+        tracing::debug!(query = %request.query, "Routing to stdlib handler");
         return handle_stdlib_inspect(stdlib, &request).await;
     }
 
@@ -70,6 +72,7 @@ pub async fn handle_inspect_item(
                     });
             }
 
+            tracing::warn!("No workspace configured and stdlib not available");
             return Err(
                 "No workspace configured and standard library docs not available.\n\n\
                  To configure a workspace:\n\
@@ -126,6 +129,8 @@ pub async fn handle_inspect_item(
 
         // Try path resolution for direct lookup
         if let Some(item_ref) = query_ctx.resolve_path(&full_path, &mut suggestions) {
+            tracing::debug!(path = %full_path, "Resolved item via direct path lookup");
+
             // Apply kind filter if specified
             if let Some(kind_filter) = request.kind
                 && !matches_kind(item_ref.inner(), kind_filter)
@@ -173,8 +178,8 @@ pub async fn handle_inspect_item(
         // Early termination if we have enough results
         if all_results.len() >= MAX_TOTAL_RESULTS {
             tracing::debug!(
-                "Reached maximum result limit ({}), stopping search",
-                MAX_TOTAL_RESULTS
+                max_results = MAX_TOTAL_RESULTS,
+                "Reached maximum result limit, stopping search"
             );
             break;
         }
@@ -247,6 +252,13 @@ pub async fn handle_inspect_item(
             .cmp(&a.relevance)
             .then_with(|| a.name.cmp(&b.name))
     });
+
+    tracing::debug!(
+        result_count = all_results.len(),
+        crates_searched = crates_to_search.len(),
+        failures = search_failures.len(),
+        "Search completed"
+    );
 
     // Deduplicate results by item ID (same item may appear at different paths due to re-exports)
     {
@@ -328,6 +340,11 @@ pub async fn handle_inspect_item(
     }
 
     if all_results.len() > 1 {
+        tracing::debug!(
+            match_count = all_results.len(),
+            query = %search_query,
+            "Multiple matches found, returning disambiguation"
+        );
         return Err(format_disambiguation_error(
             &all_results,
             &search_query,
@@ -546,6 +563,11 @@ async fn handle_stdlib_inspect(
     let available_crates = stdlib.available_crates();
 
     if results.is_empty() {
+        tracing::debug!(
+            query = %request.query,
+            crate_name = %target_crate,
+            "Item not found in stdlib"
+        );
         return Err(format!(
             "Item '{}' not found in {}.\n\n\
              Try:\n\
@@ -573,5 +595,6 @@ async fn handle_stdlib_inspect(
         return format_item_output(item_ref, request.detail_level, &target_crate);
     }
 
+    tracing::debug!(query = %request.query, "Failed to resolve item in stdlib");
     Err(format!("Failed to resolve item '{}'", request.query))
 }

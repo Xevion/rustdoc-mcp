@@ -118,6 +118,7 @@ impl DocState {
 
     /// Clear cached docs (e.g., when workspace changes).
     pub async fn clear_cache(&self) {
+        tracing::debug!("Clearing documentation cache");
         self.cache.write().await.clear();
         self.in_flight.lock().await.clear();
     }
@@ -133,7 +134,7 @@ impl DocState {
         {
             let mut cache = self.cache.write().await;
             if let Some(index) = cache.get(crate_name) {
-                tracing::debug!("Cache hit for {}", crate_name);
+                tracing::debug!(crate_name, "Cache hit");
                 return Ok(index.clone());
             }
         }
@@ -145,7 +146,7 @@ impl DocState {
         };
 
         if let Some(future) = maybe_future {
-            tracing::debug!("Awaiting in-flight generation for {}", crate_name);
+            tracing::debug!(crate_name, "Awaiting in-flight generation");
             return future.await;
         }
 
@@ -206,7 +207,7 @@ impl DocState {
             in_flight.insert(CrateName::new_unchecked(crate_name), shared_future.clone());
         }
 
-        tracing::info!("Starting documentation generation for {}", crate_name);
+        tracing::info!(crate_name, "Starting documentation generation");
 
         // Await the result
         let result = shared_future.await;
@@ -221,7 +222,7 @@ impl DocState {
         if let Ok(ref index) = result {
             let mut cache = self.cache.write().await;
             cache.put(CrateName::new_unchecked(crate_name), index.clone());
-            tracing::debug!("Cached docs for {}", crate_name);
+            tracing::debug!(crate_name, "Cached docs");
         }
 
         result
@@ -300,7 +301,7 @@ impl BackgroundWorker {
         }
 
         // 3. Configure the new workspace
-        tracing::debug!("Detected workspace change: {:?}", workspace_path);
+        tracing::debug!(workspace_path = %workspace_path.display(), "Detected workspace change");
 
         match handle_set_workspace(workspace_path.display().to_string(), None).await {
             Ok((canonical_path, workspace_info, _changed)) => {
@@ -320,17 +321,17 @@ impl BackgroundWorker {
                     .await;
 
                 tracing::info!(
-                    "Background worker configured workspace: {} ({} members, {} crates)",
-                    canonical_path.display(),
-                    workspace_info.members.len(),
-                    workspace_info.crate_info.len()
+                    workspace = %canonical_path.display(),
+                    members = workspace_info.members.len(),
+                    crates = workspace_info.crate_info.len(),
+                    "Background worker configured workspace"
                 );
 
                 // 4. Start generating docs
                 self.generate_uncached_docs(&workspace_info).await;
             }
             Err(e) => {
-                tracing::warn!("Background workspace detection failed: {}", e);
+                tracing::warn!(error = %e, "Background workspace detection failed");
             }
         }
     }
@@ -355,10 +356,10 @@ impl BackgroundWorker {
             // Generate docs (this will cache on success)
             match self.state.get_docs(crate_name.as_str()).await {
                 Ok(_) => {
-                    tracing::debug!("Background generated docs for {}", crate_name);
+                    tracing::debug!(crate_name = %crate_name, "Background generated docs");
                 }
                 Err(e) => {
-                    tracing::warn!("Background doc generation failed for {}: {}", crate_name, e);
+                    tracing::warn!(crate_name = %crate_name, error = %e, "Background doc generation failed");
                 }
             }
 

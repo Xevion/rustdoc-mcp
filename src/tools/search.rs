@@ -27,6 +27,7 @@ fn default_limit() -> Option<usize> {
 }
 
 /// Execute the search operation using TF-IDF indexing.
+#[tracing::instrument(skip_all, fields(query = %request.query, crate_name = %request.crate_name))]
 pub async fn handle_search(
     state: &Arc<DocState>,
     request: SearchRequest,
@@ -35,6 +36,7 @@ pub async fn handle_search(
     if StdlibDocs::is_stdlib_crate(&request.crate_name)
         && let Some(stdlib) = state.stdlib()
     {
+        tracing::debug!(crate_name = %request.crate_name, "Routing search to stdlib");
         return handle_stdlib_search(stdlib, &request).await;
     }
 
@@ -58,6 +60,7 @@ pub async fn handle_search(
                 ));
             }
 
+            tracing::warn!("Search failed: no workspace and no stdlib available");
             return Err(
                 "No workspace configured and standard library docs not available.\n\n\
                  To configure a workspace:\n\
@@ -76,6 +79,11 @@ pub async fn handle_search(
     let index = match TermIndex::load_or_build(&query_ctx, &request.crate_name) {
         Ok(index) => index,
         Err(mut suggestions) => {
+            tracing::debug!(
+                crate_name = %request.crate_name,
+                suggestions = suggestions.len(),
+                "Crate not found, returning suggestions"
+            );
             // Format suggestions for crate name
             let mut result = format!(
                 "Crate '{}' not found. Did you mean one of these?\n\n",
@@ -103,7 +111,19 @@ pub async fn handle_search(
     let limit = request.limit.unwrap_or(10);
     let results = index.search(&request.query, limit);
 
+    tracing::debug!(
+        query = %request.query,
+        crate_name = %request.crate_name,
+        result_count = results.len(),
+        "Search completed"
+    );
+
     if results.is_empty() {
+        tracing::debug!(
+            query = %request.query,
+            crate_name = %request.crate_name,
+            "No search results found"
+        );
         let mut msg = format!(
             "No results found for '{}' in crate '{}'.\n\n",
             request.query, request.crate_name
@@ -203,10 +223,14 @@ async fn handle_stdlib_search(
     request: &SearchRequest,
 ) -> Result<String, String> {
     // Load the stdlib crate docs
-    let _crate_index = stdlib
-        .load(&request.crate_name)
-        .await
-        .map_err(|e| format!("Failed to load {} documentation: {}", request.crate_name, e))?;
+    let _crate_index = stdlib.load(&request.crate_name).await.map_err(|e| {
+        tracing::error!(
+            crate_name = %request.crate_name,
+            error = %e,
+            "Failed to load stdlib documentation"
+        );
+        format!("Failed to load {} documentation: {}", request.crate_name, e)
+    })?;
 
     // Build a minimal workspace context for stdlib
     let mut crate_info = HashMap::new();

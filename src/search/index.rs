@@ -144,9 +144,9 @@ impl TermIndex {
 
         // Build index synchronously
         let start = std::time::Instant::now();
-        tracing::info!("Building search index for '{}'", crate_name);
+        tracing::info!(crate_name = %crate_name, "Building search index");
         let terms = build_index(item);
-        tracing::debug!("Index build completed in {:?}", start.elapsed());
+        tracing::debug!(crate_name = %crate_name, elapsed = ?start.elapsed(), "Index build completed");
 
         Ok((crate_name, doc_path, index_path, terms))
     }
@@ -167,10 +167,10 @@ impl TermIndex {
         // Try loading cached index
         if let Some(terms) = Self::load(&index_path, mtime).await {
             tracing::debug!(
-                "Loaded cached search index for '{}' ({} terms, {} docs)",
-                crate_name,
-                terms.terms.len(),
-                terms.ids.len()
+                crate_name = %crate_name,
+                terms = terms.terms.len(),
+                docs = terms.ids.len(),
+                "Loaded cached search index"
             );
             return Self { crate_name, terms };
         }
@@ -234,10 +234,10 @@ impl TermIndex {
                 let mut file = std::fs::File::open(&path).ok()?;
                 let mut buf = [0u8; 8192];
                 if let Ok((terms, _)) = from_io((&mut file, &mut buf)) {
-                    tracing::debug!("Using cached index (newer than source)");
+                    tracing::debug!(path = %path.display(), "Using cached index (newer than source)");
                     return Some(terms);
                 } else {
-                    tracing::warn!("Failed to deserialize cached index at {}", path.display());
+                    tracing::warn!(path = %path.display(), "Failed to deserialize cached index");
                 }
                 None
             })
@@ -245,10 +245,7 @@ impl TermIndex {
             .ok()?
         } else {
             // Delete stale index
-            tracing::info!(
-                "Cache stale or invalid, will rebuild index (file: {})",
-                path.display()
-            );
+            tracing::info!(path = %path.display(), "Cache stale or invalid, will rebuild index");
             let _ = tokio::fs::remove_file(path).await;
             None
         }
@@ -268,18 +265,18 @@ impl TermIndex {
             {
                 Ok(mut file) => {
                     if let Err(e) = to_io(&terms, &mut file) {
-                        tracing::warn!("Failed to write search index to {}: {}", path.display(), e);
+                        tracing::warn!(path = %path.display(), error = %e, "Failed to write search index");
                         let _ = std::fs::remove_file(&path);
                     } else {
-                        tracing::debug!("Cached search index to {}", path.display());
+                        tracing::debug!(path = %path.display(), "Cached search index");
                     }
                 }
                 Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
-                    tracing::warn!("Failed to create index file {}: {}", path.display(), e);
+                    tracing::warn!(path = %path.display(), error = %e, "Failed to create index file");
                 }
                 _ => {
                     // Already exists, another process may have created it
-                    tracing::debug!("Index file already exists at {}", path.display());
+                    tracing::debug!(path = %path.display(), "Index file already exists");
                 }
             }
         })

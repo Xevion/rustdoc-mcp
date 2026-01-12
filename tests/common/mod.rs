@@ -36,6 +36,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 
+pub fn init_tracing() {
+    rustdoc_mcp::tracing::init();
+}
+
 /// Returns the project root directory (where Cargo.toml lives).
 pub fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -204,6 +208,7 @@ impl IsolatedWorkspace {
     /// # Arguments
     /// * `crates` - List of crate names to include (e.g., `["rustdoc-mcp", "serde"]`)
     pub fn with_deps(crates: &[&str]) -> Self {
+        init_tracing();
         let workspace = TempWorkspace::new();
         let project = project_root();
 
@@ -346,6 +351,7 @@ pub fn isolated_workspace_with_serde() -> IsolatedWorkspace {
 /// Prefer `isolated_workspace` unless you specifically need to test shared-state behavior.
 #[fixture]
 pub fn shared_state() -> Arc<DocState> {
+    init_tracing();
     let project_root = project_root();
 
     // Build crate_info for all crates we want to test against

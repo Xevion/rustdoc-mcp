@@ -13,12 +13,14 @@ use std::path::{Path, PathBuf};
 ///
 /// Returns a tuple of (canonical_path, workspace_context, changed) where
 /// `changed` indicates whether the workspace was actually changed.
+#[tracing::instrument(skip_all, fields(path = %path))]
 pub(crate) async fn handle_set_workspace(
     path: String,
     current_workspace: Option<&Path>,
 ) -> Result<(PathBuf, WorkspaceContext, bool)> {
     // Validate input - check for empty or whitespace-only paths
     if path.trim().is_empty() {
+        tracing::warn!("Empty path provided to set_workspace");
         return Err(anyhow!(
             "Path cannot be empty. Please provide a path to your Rust project directory."
         ));
@@ -30,6 +32,7 @@ pub(crate) async fn handle_set_workspace(
 
     // Canonicalize the path
     let canonical_path = tokio::fs::canonicalize(&path_buf).await.map_err(|e| {
+        tracing::warn!(path = %path, error = %e, "Failed to resolve workspace path");
         anyhow!(
             "Failed to resolve path '{}': {}. Please check the path exists and is accessible.",
             path,
@@ -86,12 +89,19 @@ pub(crate) async fn handle_set_workspace(
     // Find the workspace root (handles member crates automatically)
     // This walks upward to find a Cargo.toml with [workspace] section
     let workspace_root = find_workspace_root(&resolved_dir).ok_or_else(|| {
+        tracing::warn!(path = %resolved_dir.display(), "No Rust workspace found");
         anyhow!(
             "No valid Rust workspace found at or above: `{}`. \
              Please ensure the directory contains a Cargo.toml file.",
             resolved_dir.display()
         )
     })?;
+
+    tracing::debug!(
+        requested = %resolved_dir.display(),
+        resolved = %workspace_root.display(),
+        "Found workspace root"
+    );
 
     // Check if workspace has changed
     let workspace_changed = current_workspace

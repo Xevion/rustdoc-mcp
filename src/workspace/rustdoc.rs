@@ -8,7 +8,6 @@ use crate::search::rustdoc::CrateIndex;
 use crate::types::CrateName;
 use anyhow::Context;
 use std::path::Path;
-use tracing::{debug, error, info};
 
 /// Loads or regenerates rustdoc JSON for a crate using digest-based caching.
 /// Regenerates documentation when source files change (workspace members) or when
@@ -65,19 +64,19 @@ pub(crate) async fn get_docs(
         !doc_path.exists() || saved_digest.is_none() || saved_digest.unwrap() != current_digest;
 
     if needs_regen {
-        debug!("Documentation needs regeneration for {}", crate_name);
-        info!(
-            "Generating documentation for {}{}",
-            crate_name,
-            version.map(|v| format!("@{}", v)).unwrap_or_default()
+        tracing::debug!(crate_name = %crate_name, "Documentation needs regeneration");
+        tracing::info!(
+            crate_name = %crate_name,
+            version = version,
+            "Generating documentation"
         );
 
         generate_docs(crate_name, version, workspace_root).await?;
         save_digest(&digest_path, &current_digest).await?;
 
-        info!("Documentation generated");
+        tracing::info!(crate_name = %crate_name, "Documentation generated");
     } else {
-        debug!("Using cached documentation for {}", crate_name);
+        tracing::debug!(crate_name = %crate_name, "Using cached documentation");
     }
 
     CrateIndex::load(&doc_path)
@@ -119,11 +118,12 @@ pub async fn generate_docs(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        error!(
-            "Failed to generate documentation for '{}': {}",
-            package_spec, stderr
+        tracing::error!(
+            package = %package_spec,
+            stderr = %stderr,
+            "Documentation generation failed"
         );
-        error!(
+        tracing::error!(
             "Make sure: 1) Nightly toolchain is installed (rustup install nightly), 2) The crate exists in your dependencies"
         );
         anyhow::bail!("rustdoc command failed for crate '{}'", package_spec);

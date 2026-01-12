@@ -14,7 +14,6 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use std::sync::Arc;
-use tracing::error;
 
 /// Parameters for set_workspace tool
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -82,6 +81,7 @@ impl ItemServer {
 
         // Clear cache when workspace changes
         if changed {
+            tracing::info!("Workspace changed, clearing documentation cache");
             self.state.clear_cache().await;
         }
 
@@ -187,10 +187,10 @@ pub fn inline_schema_for_type<T: JsonSchema>() -> Arc<JsonObject> {
     let object = match serde_json::to_value(schema) {
         Ok(value) => value,
         Err(e) => {
-            error!(
-                "Failed to serialize schema for {}: {}. Using fallback.",
-                std::any::type_name::<T>(),
-                e
+            tracing::error!(
+                type_name = std::any::type_name::<T>(),
+                error = %e,
+                "Failed to serialize schema, using fallback"
             );
             return create_fallback_schema();
         }
@@ -199,10 +199,10 @@ pub fn inline_schema_for_type<T: JsonSchema>() -> Arc<JsonObject> {
     match object {
         serde_json::Value::Object(obj) => Arc::new(obj),
         unexpected => {
-            error!(
-                "Schema for {} produced {:?}, expected object. Using fallback.",
-                std::any::type_name::<T>(),
-                unexpected
+            tracing::error!(
+                type_name = std::any::type_name::<T>(),
+                value_type = ?unexpected,
+                "Schema produced non-object, using fallback"
             );
             create_fallback_schema()
         }

@@ -183,18 +183,16 @@ impl QueryContext {
             // Check if we have the minimum requirements to generate docs
             if !self.can_generate_docs(crate_name) {
                 tracing::debug!(
-                    "Cannot generate docs for '{}': environment not suitable",
-                    crate_name
+                    crate_name,
+                    reason = "environment not suitable",
+                    "Cannot generate docs"
                 );
                 return Err(LoadError::NotFound {
                     crate_name: crate_name_typed,
                 });
             }
 
-            tracing::info!(
-                "Documentation not found for '{}', generating...",
-                crate_name
-            );
+            tracing::info!(crate_name, "Documentation not found, generating");
 
             let is_workspace_member = self.workspace.members.iter().any(|m| m.matches(crate_name));
             let version = self.workspace.get_version(crate_name);
@@ -217,7 +215,7 @@ impl QueryContext {
             });
 
             if let Err(e) = result {
-                tracing::error!("Failed to generate docs for '{}': {}", crate_name, e);
+                tracing::error!(crate_name, error = %e, "Failed to generate docs");
                 return Err(LoadError::GenerationFailed {
                     crate_name: crate_name_typed,
                     error: e.to_string(),
@@ -235,7 +233,7 @@ impl QueryContext {
 
         // Load the documentation (either existing or just generated)
         let crate_index = CrateIndex::load(&doc_path).map_err(|e| {
-            tracing::error!("Failed to load docs for '{}': {}", crate_name, e);
+            tracing::error!(crate_name, error = %e, "Failed to load docs");
             LoadError::ParseError {
                 crate_name: CrateName::new_unchecked(crate_name),
                 error: e.to_string(),

@@ -3,16 +3,10 @@ use rustdoc_mcp::server::ItemServer;
 use rustdoc_mcp::stdlib::StdlibDocs;
 use rustdoc_mcp::worker::spawn_background_worker;
 use std::sync::Arc;
-use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Set up logging - write to stderr to avoid interfering with MCP protocol on stdout
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .init();
+    rustdoc_mcp::tracing::init();
 
     tracing::info!("Starting rustdoc-mcp MCP server");
 

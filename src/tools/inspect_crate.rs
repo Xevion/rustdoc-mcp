@@ -38,12 +38,14 @@ pub struct InspectCrateRequest {
 /// - Item counts by kind
 /// - Common exports
 /// - Usage information
+#[tracing::instrument(skip_all, fields(crate_name = ?request.crate_name))]
 pub async fn handle_inspect_crate(
     state: &Arc<DocState>,
     request: InspectCrateRequest,
 ) -> Result<String> {
     // Try workspace first
     if let Some(workspace_ctx) = state.workspace().await {
+        tracing::debug!("Using workspace context");
         return match request.crate_name {
             None => render_summary_mode(&workspace_ctx, request.detail_level).await,
             Some(crate_name) => {
@@ -51,6 +53,7 @@ pub async fn handle_inspect_crate(
                 if StdlibDocs::is_stdlib_crate(&crate_name)
                     && let Some(stdlib) = state.stdlib()
                 {
+                    tracing::debug!(crate_name = %crate_name, "Routing stdlib crate to stdlib handler");
                     return render_stdlib_detail_mode(&crate_name, stdlib, request.detail_level)
                         .await;
                 }
@@ -58,6 +61,8 @@ pub async fn handle_inspect_crate(
             }
         };
     }
+
+    tracing::debug!("No workspace, falling back to stdlib");
 
     // No workspace - fall back to stdlib if available
     let stdlib = state.stdlib().ok_or_else(|| {
