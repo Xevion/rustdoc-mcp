@@ -7,7 +7,7 @@ use super::{DetailLevel, TypeFormatter};
 use crate::item::item_ref::ItemRef;
 use rustdoc_types::{Item, ItemEnum, ItemKind};
 use std::collections::HashMap;
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 /// Render struct output
 pub(crate) fn render_struct(
@@ -16,29 +16,36 @@ pub(crate) fn render_struct(
     s: &rustdoc_types::Struct,
     detail_level: DetailLevel,
     crate_name: &str,
-) -> Result<(), String> {
+) -> fmt::Result {
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string());
+    let fmt = TypeFormatter::new(item.crate_index());
 
-    // Low: signature only
-    let _ = writeln!(output, "struct {} {{", name);
-    let _ = writeln!(output, "  // in {}::{}", crate_name, path);
-    let _ = writeln!(output, "}}");
+    // Low: signature with generics
+    write!(output, "struct {}", name)?;
+    fmt.write_generics(output, &s.generics)?;
+
+    let sig_len = 7 + name.len(); // Approximate for "struct " + name
+    fmt.write_where_clause(output, &s.generics.where_predicates, sig_len)?;
+
+    writeln!(output, " {{")?;
+    writeln!(output, "  // in {}::{}", crate_name, path)?;
+    writeln!(output, "}}")?;
 
     // Medium: add short docs
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
     {
         let short_docs = extract_summary(docs);
-        let _ = writeln!(output, "\n{}", short_docs);
+        writeln!(output, "\n{}", short_docs)?;
     }
 
     // High: add fields and implementations
     if matches!(detail_level, DetailLevel::High) {
-        let _ = writeln!(output, "\nFields:");
+        writeln!(output, "\nFields:")?;
         match &s.kind {
             rustdoc_types::StructKind::Plain { fields, .. } => {
                 for field_id in fields {
@@ -46,8 +53,9 @@ pub(crate) fn render_struct(
                         && let ItemEnum::StructField(ty) = field_item.inner()
                     {
                         let field_name = field_item.name().unwrap_or("<unnamed>");
-                        let type_name = item.crate_index().format_type(ty);
-                        let _ = writeln!(output, "  {}: {}", field_name, type_name);
+                        write!(output, "  {}: ", field_name)?;
+                        fmt.write_type(output, ty)?;
+                        writeln!(output)?;
                     }
                 }
             }
@@ -57,13 +65,14 @@ pub(crate) fn render_struct(
                         && let Some(field_item) = item.get(field_id)
                         && let ItemEnum::StructField(ty) = field_item.inner()
                     {
-                        let type_name = item.crate_index().format_type(ty);
-                        let _ = writeln!(output, "  {}: {}", i, type_name);
+                        write!(output, "  {}: ", i)?;
+                        fmt.write_type(output, ty)?;
+                        writeln!(output)?;
                     }
                 }
             }
             rustdoc_types::StructKind::Unit => {
-                let _ = writeln!(output, "  (unit struct)");
+                writeln!(output, "  (unit struct)")?;
             }
         }
     }
@@ -78,29 +87,36 @@ pub(crate) fn render_enum(
     e: &rustdoc_types::Enum,
     detail_level: DetailLevel,
     crate_name: &str,
-) -> Result<(), String> {
+) -> fmt::Result {
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string());
+    let fmt = TypeFormatter::new(item.crate_index());
 
-    // Low: signature only
-    let _ = writeln!(output, "enum {} {{", name);
-    let _ = writeln!(output, "  // in {}::{}", crate_name, path);
-    let _ = writeln!(output, "}}");
+    // Low: signature with generics
+    write!(output, "enum {}", name)?;
+    fmt.write_generics(output, &e.generics)?;
+
+    let sig_len = 5 + name.len(); // Approximate for "enum " + name
+    fmt.write_where_clause(output, &e.generics.where_predicates, sig_len)?;
+
+    writeln!(output, " {{")?;
+    writeln!(output, "  // in {}::{}", crate_name, path)?;
+    writeln!(output, "}}")?;
 
     // Medium: add short docs
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
     {
         let short_docs = extract_summary(docs);
-        let _ = writeln!(output, "\n{}", short_docs);
+        writeln!(output, "\n{}", short_docs)?;
     }
 
     // High: add variants
     if matches!(detail_level, DetailLevel::High) {
-        let _ = writeln!(output, "\nVariants:");
+        writeln!(output, "\nVariants:")?;
         for variant_id in &e.variants {
             if let Some(variant_item) = item.get(variant_id)
                 && let ItemEnum::Variant(v) = variant_item.inner()
@@ -108,39 +124,36 @@ pub(crate) fn render_enum(
                 let variant_name = variant_item.name().unwrap_or("<unnamed>");
                 match &v.kind {
                     rustdoc_types::VariantKind::Plain => {
-                        let _ = writeln!(output, "  {},", variant_name);
+                        writeln!(output, "  {},", variant_name)?;
                     }
                     rustdoc_types::VariantKind::Tuple(fields) => {
-                        let _ = write!(output, "  {}(", variant_name);
+                        write!(output, "  {}(", variant_name)?;
                         for (i, field_id_opt) in fields.iter().enumerate() {
                             if let Some(field_id) = field_id_opt
                                 && let Some(field_item) = item.get(field_id)
                                 && let ItemEnum::StructField(ty) = field_item.inner()
                             {
                                 if i > 0 {
-                                    let _ = write!(output, ", ");
+                                    write!(output, ", ")?;
                                 }
-                                let _ = write!(output, "{}", item.crate_index().format_type(ty));
+                                fmt.write_type(output, ty)?;
                             }
                         }
-                        let _ = writeln!(output, "),");
+                        writeln!(output, "),")?;
                     }
                     rustdoc_types::VariantKind::Struct { fields, .. } => {
-                        let _ = writeln!(output, "  {} {{", variant_name);
+                        writeln!(output, "  {} {{", variant_name)?;
                         for field_id in fields {
                             if let Some(field_item) = item.get(field_id)
                                 && let ItemEnum::StructField(ty) = field_item.inner()
                             {
                                 let field_name = field_item.name().unwrap_or("<unnamed>");
-                                let _ = writeln!(
-                                    output,
-                                    "    {}: {},",
-                                    field_name,
-                                    item.crate_index().format_type(ty)
-                                );
+                                write!(output, "    {}: ", field_name)?;
+                                fmt.write_type(output, ty)?;
+                                writeln!(output, ",")?;
                             }
                         }
-                        let _ = writeln!(output, "  }},");
+                        writeln!(output, "  }},")?;
                     }
                 }
             }
@@ -157,27 +170,25 @@ pub(crate) fn render_function(
     _f: &rustdoc_types::Function,
     detail_level: DetailLevel,
     crate_name: &str,
-) -> Result<(), String> {
+) -> fmt::Result {
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string());
+    let fmt = TypeFormatter::new(item.crate_index());
 
     // Low: signature only
-    if let Some(signature) = item.crate_index().format_function_signature(&item) {
-        let _ = writeln!(output, "{}", signature);
-    } else {
-        let _ = writeln!(output, "fn {}()", name);
-    }
-    let _ = writeln!(output, "// in {}::{}", crate_name, path);
+    fmt.write_function_signature(output, &item)?;
+    writeln!(output)?;
+    writeln!(output, "// in {}::{}", crate_name, path)?;
 
     // Medium: add short docs
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
     {
         let short_docs = extract_summary(docs);
-        let _ = writeln!(output, "\n{}", short_docs);
+        writeln!(output, "\n{}", short_docs)?;
     }
 
     Ok(())
@@ -190,35 +201,46 @@ pub(crate) fn render_trait(
     t: &rustdoc_types::Trait,
     detail_level: DetailLevel,
     crate_name: &str,
-) -> Result<(), String> {
+) -> fmt::Result {
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string());
+    let fmt = TypeFormatter::new(item.crate_index());
 
-    // Low: signature only
-    let _ = writeln!(output, "trait {} {{", name);
-    let _ = writeln!(output, "  // in {}::{}", crate_name, path);
-    let _ = writeln!(output, "}}");
+    // Low: signature with generics and supertraits
+    write!(output, "trait {}", name)?;
+    fmt.write_generics(output, &t.generics)?;
+
+    let supertrait_len = 6 + name.len(); // Approximate for "trait " + name
+    fmt.write_supertrait_bounds(output, &t.bounds, supertrait_len)?;
+
+    let sig_len = supertrait_len; // Approximate
+    fmt.write_where_clause(output, &t.generics.where_predicates, sig_len)?;
+
+    writeln!(output, " {{")?;
+    writeln!(output, "  // in {}::{}", crate_name, path)?;
+    writeln!(output, "}}")?;
 
     // Medium: add short docs
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
     {
         let short_docs = extract_summary(docs);
-        let _ = writeln!(output, "\n{}", short_docs);
+        writeln!(output, "\n{}", short_docs)?;
     }
 
     // High: add methods
     if matches!(detail_level, DetailLevel::High) {
-        let _ = writeln!(output, "\nMethods:");
+        writeln!(output, "\nMethods:")?;
         for item_id in &t.items {
             if let Some(method_item) = item.get(item_id)
                 && matches!(method_item.inner(), ItemEnum::Function(_))
-                && let Some(sig) = item.crate_index().format_function_signature(&method_item)
             {
-                let _ = writeln!(output, "  {}", sig);
+                write!(output, "  ")?;
+                fmt.write_function_signature(output, &method_item)?;
+                writeln!(output)?;
             }
         }
     }
@@ -232,7 +254,7 @@ pub(crate) fn render_module(
     item: ItemRef<'_, Item>,
     detail_level: DetailLevel,
     crate_name: &str,
-) -> Result<(), String> {
+) -> fmt::Result {
     let default_name = crate_name.to_string();
     let name = item.name().unwrap_or(&default_name);
     let path = item
@@ -240,8 +262,8 @@ pub(crate) fn render_module(
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string());
 
-    let _ = writeln!(output, "module {}", name);
-    let _ = writeln!(output, "// in {}::{}", crate_name, path);
+    writeln!(output, "module {}", name)?;
+    writeln!(output, "// in {}::{}", crate_name, path)?;
 
     // Get module's child items
     let children: Vec<_> = item.children().build().collect();
@@ -251,7 +273,7 @@ pub(crate) fn render_module(
         && let Some(docs) = item.comment()
     {
         let short_docs = extract_summary(docs);
-        let _ = writeln!(output, "\n{}", short_docs);
+        writeln!(output, "\n{}", short_docs)?;
     }
 
     // Determine item limit based on detail level
@@ -288,7 +310,7 @@ pub(crate) fn render_module(
                 continue;
             }
 
-            let _ = writeln!(output, "\n{}:", category_name);
+            writeln!(output, "\n{}:", category_name)?;
             let displayed_count = items.len().min(item_limit);
 
             for child in items.iter().take(displayed_count) {
@@ -297,27 +319,27 @@ pub(crate) fn render_module(
                 match detail_level {
                     DetailLevel::Low => {
                         // Just the name
-                        let _ = writeln!(output, "  {}", child_name);
+                        writeln!(output, "  {}", child_name)?;
                     }
                     DetailLevel::Medium => {
                         // Name + first line of docs
-                        let _ = write!(output, "  {}", child_name);
+                        write!(output, "  {}", child_name)?;
                         if let Some(docs) = child.comment()
                             && let Some(first_line) = docs.lines().next()
                         {
                             let trimmed = first_line.trim();
                             if !trimmed.is_empty() {
-                                let _ = write!(output, " // {}", trimmed);
+                                write!(output, " // {}", trimmed)?;
                             }
                         }
-                        let _ = writeln!(output);
+                        writeln!(output)?;
                     }
                     DetailLevel::High => {
                         // Signature + summary docs
                         if let Some(sig) = render_item_signature(*child) {
-                            let _ = writeln!(output, "  {}", sig);
+                            writeln!(output, "  {}", sig)?;
                         } else {
-                            let _ = writeln!(output, "  {}", child_name);
+                            writeln!(output, "  {}", child_name)?;
                         }
 
                         // Add summary index comment
@@ -326,7 +348,7 @@ pub(crate) fn render_module(
                         {
                             let trimmed = first_line.trim();
                             if !trimmed.is_empty() {
-                                let _ = writeln!(output, "    // {}", trimmed);
+                                writeln!(output, "    // {}", trimmed)?;
                             }
                         }
                     }
@@ -335,7 +357,7 @@ pub(crate) fn render_module(
 
             // Show count if we hit the limit
             if items.len() > displayed_count {
-                let _ = writeln!(output, "  ... and {} more", items.len() - displayed_count);
+                writeln!(output, "  ... and {} more", items.len() - displayed_count)?;
             }
         }
     }
@@ -350,22 +372,26 @@ pub(crate) fn render_type_alias(
     ta: &rustdoc_types::TypeAlias,
     detail_level: DetailLevel,
     crate_name: &str,
-) -> Result<(), String> {
+) -> fmt::Result {
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string());
-    let type_str = item.crate_index().format_type(&ta.type_);
+    let fmt = TypeFormatter::new(item.crate_index());
 
-    let _ = writeln!(output, "type {} = {};", name, type_str);
-    let _ = writeln!(output, "// in {}::{}", crate_name, path);
+    write!(output, "type {}", name)?;
+    fmt.write_generics(output, &ta.generics)?;
+    write!(output, " = ")?;
+    fmt.write_type(output, &ta.type_)?;
+    writeln!(output, ";")?;
+    writeln!(output, "// in {}::{}", crate_name, path)?;
 
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
     {
         let short_docs = extract_summary(docs);
-        let _ = writeln!(output, "\n{}", short_docs);
+        writeln!(output, "\n{}", short_docs)?;
     }
 
     Ok(())
@@ -378,22 +404,24 @@ pub(crate) fn render_constant(
     type_: &rustdoc_types::Type,
     detail_level: DetailLevel,
     crate_name: &str,
-) -> Result<(), String> {
+) -> fmt::Result {
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string());
-    let type_str = item.crate_index().format_type(type_);
+    let fmt = TypeFormatter::new(item.crate_index());
 
-    let _ = writeln!(output, "const {}: {};", name, type_str);
-    let _ = writeln!(output, "// in {}::{}", crate_name, path);
+    write!(output, "const {}: ", name)?;
+    fmt.write_type(output, type_)?;
+    writeln!(output, ";")?;
+    writeln!(output, "// in {}::{}", crate_name, path)?;
 
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
     {
         let short_docs = extract_summary(docs);
-        let _ = writeln!(output, "\n{}", short_docs);
+        writeln!(output, "\n{}", short_docs)?;
     }
 
     Ok(())
@@ -406,28 +434,29 @@ pub(crate) fn render_static(
     s: &rustdoc_types::Static,
     detail_level: DetailLevel,
     crate_name: &str,
-) -> Result<(), String> {
+) -> fmt::Result {
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
         .map(|p| p.to_string())
         .unwrap_or_else(|| name.to_string());
-    let type_str = item.crate_index().format_type(&s.type_);
+    let fmt = TypeFormatter::new(item.crate_index());
 
-    let _ = writeln!(
+    write!(
         output,
-        "static {}{}: {};",
+        "static {}{}: ",
         if s.is_mutable { "mut " } else { "" },
-        name,
-        type_str
-    );
-    let _ = writeln!(output, "// in {}::{}", crate_name, path);
+        name
+    )?;
+    fmt.write_type(output, &s.type_)?;
+    writeln!(output, ";")?;
+    writeln!(output, "// in {}::{}", crate_name, path)?;
 
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
     {
         let short_docs = extract_summary(docs);
-        let _ = writeln!(output, "\n{}", short_docs);
+        writeln!(output, "\n{}", short_docs)?;
     }
 
     Ok(())
@@ -438,33 +467,55 @@ pub(crate) fn render_item_signature<'a>(
     item: crate::item::ItemRef<'a, rustdoc_types::Item>,
 ) -> Option<String> {
     let name = item.name()?;
+    let fmt = TypeFormatter::new(item.crate_index());
+    let mut s = String::new();
 
-    match item.inner() {
-        ItemEnum::Function(_) => item.crate_index().format_function_signature(&item),
-        ItemEnum::Struct(_) => Some(format!("struct {}", name)),
-        ItemEnum::Enum(_) => Some(format!("enum {}", name)),
-        ItemEnum::Trait(_) => Some(format!("trait {}", name)),
+    let result = match item.inner() {
+        ItemEnum::Function(_) => fmt.write_function_signature(&mut s, &item),
+        ItemEnum::Struct(st) => {
+            write!(&mut s, "struct {}", name).ok()?;
+            fmt.write_generics(&mut s, &st.generics)
+        }
+        ItemEnum::Enum(e) => {
+            write!(&mut s, "enum {}", name).ok()?;
+            fmt.write_generics(&mut s, &e.generics)
+        }
+        ItemEnum::Trait(t) => {
+            write!(&mut s, "trait {}", name).ok()?;
+            fmt.write_generics(&mut s, &t.generics).ok()?;
+            let len = 6 + name.len(); // Approximate
+            fmt.write_supertrait_bounds(&mut s, &t.bounds, len)
+        }
         ItemEnum::TypeAlias(ta) => {
-            let type_str = item.crate_index().format_type(&ta.type_);
-            Some(format!("type {} = {}", name, type_str))
+            write!(&mut s, "type {}", name).ok()?;
+            fmt.write_generics(&mut s, &ta.generics).ok()?;
+            write!(&mut s, " = ").ok()?;
+            fmt.write_type(&mut s, &ta.type_)
         }
         ItemEnum::Constant { type_, .. } => {
-            let type_str = item.crate_index().format_type(type_);
-            Some(format!("const {}: {}", name, type_str))
+            write!(&mut s, "const {}: ", name).ok()?;
+            fmt.write_type(&mut s, type_)
         }
-        ItemEnum::Static(s) => {
-            let type_str = item.crate_index().format_type(&s.type_);
-            Some(format!(
-                "static {}{}: {}",
-                if s.is_mutable { "mut " } else { "" },
-                name,
-                type_str
-            ))
+        ItemEnum::Static(st) => {
+            write!(
+                &mut s,
+                "static {}{}: ",
+                if st.is_mutable { "mut " } else { "" },
+                name
+            )
+            .ok()?;
+            fmt.write_type(&mut s, &st.type_)
         }
-        ItemEnum::Module(_) => Some(format!("mod {}", name)),
-        ItemEnum::Macro(_) => Some(format!("macro {}", name)),
-        _ => None,
-    }
+        ItemEnum::Module(_) => {
+            write!(&mut s, "mod {}", name)
+        }
+        ItemEnum::Macro(_) => {
+            write!(&mut s, "macro {}", name)
+        }
+        _ => return None,
+    };
+
+    result.ok().map(|_| s)
 }
 
 /// Extract documentation summary (first paragraph) for truncated output

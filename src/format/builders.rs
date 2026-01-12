@@ -1,175 +1,547 @@
 //! Type formatting utilities for documentation display.
 //!
-//! This module provides type formatting capabilities via the `TypeFormatter` trait,
+//! This module provides type formatting capabilities via the `TypeFormatter` struct,
 //! converting rustdoc type information into human-readable strings.
 
 use crate::search::rustdoc::CrateIndex;
-use rustdoc_types::{GenericArgs, GenericParamDef, Id, Item, ItemEnum, Path, Type};
+use rustdoc_types::{
+    AssocItemConstraintKind, GenericArg, GenericArgs, GenericBound, GenericParamDef,
+    GenericParamDefKind, Generics, Item, ItemEnum, Path, Term, TraitBoundModifier, Type,
+    WherePredicate,
+};
+use std::fmt::{self, Write};
 
-/// Extract an ID from a rustdoc Type.
-pub(crate) fn extract_id_from_type(ty: &Type) -> Option<&Id> {
-    match ty {
-        Type::ResolvedPath(path) => Some(&path.id),
-        _ => None,
-    }
+/// Type formatter providing formatting capabilities for rustdoc types.
+///
+/// Holds a reference to a `CrateIndex` for resolving paths and type information.
+/// Provides both `write_*` methods (efficient, write to any buffer) and `format_*`
+/// methods (convenient, return String).
+pub struct TypeFormatter<'a> {
+    index: &'a CrateIndex,
 }
 
-/// Format a simple generic parameter name (without bounds or defaults).
-pub(crate) fn format_generic_param_simple(param: &GenericParamDef) -> String {
-    param.name.clone()
-}
-
-/// Extension trait providing type formatting capabilities for `CrateIndex`.
-pub trait TypeFormatter {
-    /// Formats a type for display (may use placeholder symbols).
-    fn format_type(&self, ty: &Type) -> String;
-
-    /// Formats a function's signature including generics and parameters.
-    fn format_function_signature(&self, item: &Item) -> Option<String>;
-}
-
-impl TypeFormatter for CrateIndex {
-    fn format_type(&self, ty: &Type) -> String {
-        format_type_impl(self, ty)
+impl<'a> TypeFormatter<'a> {
+    /// Create a new formatter for the given crate index.
+    pub fn new(index: &'a CrateIndex) -> Self {
+        Self { index }
     }
 
-    fn format_function_signature(&self, item: &Item) -> Option<String> {
-        if let ItemEnum::Function(func) = &item.inner {
-            let name = item.name.as_deref().unwrap_or("<unnamed>");
-            let mut sig = format!("fn {}", name);
+    /// Get the underlying crate index.
+    pub fn index(&self) -> &'a CrateIndex {
+        self.index
+    }
 
-            if !func.generics.params.is_empty() {
-                sig.push('<');
-                let generic_names: Vec<String> = func
-                    .generics
-                    .params
-                    .iter()
-                    .map(format_generic_param_simple)
-                    .collect();
-                sig.push_str(&generic_names.join(", "));
-                sig.push('>');
+    /// Write a type to the output buffer.
+    pub fn write_type<W: Write>(&self, w: &mut W, root: &Type) -> fmt::Result {
+        match root {
+            Type::ResolvedPath(path) => self.write_resolved_path(w, path),
+            Type::Generic(name) | Type::Primitive(name) => w.write_str(name),
+            Type::BorrowedRef {
+                lifetime,
+                is_mutable,
+                type_,
+            } => self.write_borrowed_ref(w, lifetime.as_deref(), *is_mutable, type_),
+            Type::Tuple(types) if types.is_empty() => w.write_str("()"),
+            Type::Tuple(types) => {
+                w.write_char('(')?;
+                for (i, t) in types.iter().enumerate() {
+                    if i > 0 {
+                        w.write_str(", ")?;
+                    }
+                    self.write_type(w, t)?;
+                }
+                w.write_char(')')
             }
-
-            sig.push('(');
-            let params: Vec<String> = func
-                .sig
-                .inputs
-                .iter()
-                .map(|(name, ty)| format!("{}: {}", name, self.format_type(ty)))
-                .collect();
-            sig.push_str(&params.join(", "));
-            sig.push(')');
-
-            if let Some(output) = &func.sig.output {
-                sig.push_str(&format!(" -> {}", self.format_type(output)));
+            Type::Slice(inner) => {
+                w.write_char('[')?;
+                self.write_type(w, inner)?;
+                w.write_char(']')
             }
+            Type::Array {
+                type_: inner_type,
+                len,
+            } => {
+                w.write_char('[')?;
+                self.write_type(w, inner_type)?;
+                write!(w, "; {}]", len)
+            }
+            Type::RawPointer { is_mutable, type_ } => {
+                w.write_str(if *is_mutable { "*mut " } else { "*const " })?;
+                self.write_type(w, type_)
+            }
+            Type::FunctionPointer(_) => w.write_str("fn(...)"),
+            Type::QualifiedPath { .. } => w.write_str("<qualified path>"),
+            // TODO: Handle these properly
+            Type::DynTrait(..) | Type::Pat { .. } | Type::ImplTrait(..) | Type::Infer => {
+                w.write_str("<type>")
+            }
+        }
+    }
 
-            Some(sig)
+    /// Write complete angle-bracketed generics: `<K: Eq + Hash, V, S = RandomState>`
+    /// Writes nothing if no non-synthetic params.
+    pub fn write_generics<W: Write>(&self, w: &mut W, generics: &Generics) -> fmt::Result {
+        let real_params: Vec<_> = generics
+            .params
+            .iter()
+            .filter(|p| {
+                !matches!(
+                    &p.kind,
+                    GenericParamDefKind::Type {
+                        is_synthetic: true,
+                        ..
+                    }
+                )
+            })
+            .collect();
+
+        if real_params.is_empty() {
+            return Ok(());
+        }
+
+        w.write_char('<')?;
+        for (i, p) in real_params.iter().enumerate() {
+            if i > 0 {
+                w.write_str(", ")?;
+            }
+            self.write_generic_param_full(w, p)?;
+        }
+        w.write_char('>')
+    }
+
+    /// Write where clause with dynamic inline/multi-line based on complexity.
+    /// Writes nothing if no predicates.
+    pub fn write_where_clause<W: Write>(
+        &self,
+        w: &mut W,
+        predicates: &[WherePredicate],
+        current_line_len: usize,
+    ) -> fmt::Result {
+        if predicates.is_empty() {
+            return Ok(());
+        }
+
+        let formatted: Vec<_> = predicates
+            .iter()
+            .map(|p| self.format_where_predicate(p))
+            .collect();
+
+        let has_hrtb = predicates.iter().any(|p| {
+            matches!(
+                p,
+                WherePredicate::BoundPredicate { generic_params, .. } if !generic_params.is_empty()
+            )
+        });
+
+        let inline = format!(" where {}", formatted.join(", "));
+        let use_multiline =
+            predicates.len() > 2 || current_line_len + inline.len() > 80 || has_hrtb;
+
+        if use_multiline {
+            w.write_str("\nwhere\n")?;
+            for (i, pred) in formatted.iter().enumerate() {
+                w.write_str("    ")?;
+                w.write_str(pred)?;
+                if i < formatted.len() - 1 {
+                    w.write_char(',')?;
+                }
+                w.write_char('\n')?;
+            }
+            Ok(())
         } else {
-            None
+            w.write_str(&inline)
         }
     }
-}
 
-/// Internal type formatter implementation.
-fn format_type_impl(index: &CrateIndex, ty: &Type) -> String {
-    match ty {
-        Type::ResolvedPath(path) => format_resolved_path(index, path),
-        Type::Generic(name) | Type::Primitive(name) => name.clone(),
-        Type::BorrowedRef {
-            lifetime,
-            is_mutable,
-            type_,
-        } => format_borrowed_ref(index, lifetime.as_deref(), *is_mutable, type_),
-        Type::Tuple(types) if types.is_empty() => "()".to_string(),
-        Type::Tuple(types) => {
-            let formatted: Vec<_> = types.iter().map(|t| format_type_impl(index, t)).collect();
-            format!("({})", formatted.join(", "))
+    /// Write supertrait bounds for traits: `: Clone + Debug`
+    /// Uses same threshold logic for inline vs where-style.
+    pub fn write_supertrait_bounds<W: Write>(
+        &self,
+        w: &mut W,
+        bounds: &[GenericBound],
+        current_line_len: usize,
+    ) -> fmt::Result {
+        if bounds.is_empty() {
+            return Ok(());
         }
-        Type::Slice(inner) => format!("[{}]", format_type_impl(index, inner)),
-        Type::Array { type_, len } => {
-            format!("[{}; {}]", format_type_impl(index, type_), len)
+
+        let formatted: Vec<_> = bounds
+            .iter()
+            .map(|b| self.format_generic_bound(b))
+            .collect();
+
+        let inline = format!(": {}", formatted.join(" + "));
+
+        if bounds.len() > 2 || current_line_len + inline.len() > 80 {
+            w.write_str("\nwhere\n    Self: ")?;
+            w.write_str(&formatted.join(" + "))
+        } else {
+            w.write_str(&inline)
         }
-        Type::RawPointer { is_mutable, type_ } => {
-            let prefix = if *is_mutable { "*mut " } else { "*const " };
-            format!("{}{}", prefix, format_type_impl(index, type_))
-        }
-        Type::FunctionPointer(_) => "fn(...)".to_string(),
-        Type::QualifiedPath { .. } => "<qualified path>".to_string(),
-        _ => "<type>".to_string(),
     }
-}
 
-/// Formats a resolved path type (e.g., `Vec<T>`, `HashMap<K, V>`).
-fn format_resolved_path(index: &CrateIndex, path: &Path) -> String {
-    let Some(summary) = index.paths().get(&path.id) else {
-        return "<type>".to_string();
-    };
+    /// Write a function signature including generics and parameters.
+    /// Returns Ok(true) if signature was written, Ok(false) if item is not a function.
+    pub fn write_function_signature<W: Write>(&self, w: &mut W, item: &Item) -> fmt::Result {
+        let ItemEnum::Function(func) = &item.inner else {
+            return Ok(());
+        };
 
-    let name = summary.path.last().map(String::as_str).unwrap_or("?");
-    let Some(args) = &path.args else {
-        return name.to_string();
-    };
+        let name = item.name.as_deref().unwrap_or("<unnamed>");
+        w.write_str("fn ")?;
+        w.write_str(name)?;
 
-    format_generic_args(index, name, args.as_ref())
-}
+        self.write_generics(w, &func.generics)?;
 
-/// Formats generic arguments (angle-bracketed or parenthesized).
-fn format_generic_args(index: &CrateIndex, name: &str, args: &GenericArgs) -> String {
-    match args {
-        GenericArgs::AngleBracketed { args, constraints } => {
-            if args.is_empty() && constraints.is_empty() {
-                return name.to_string();
+        w.write_char('(')?;
+        for (i, (param_name, ty)) in func.sig.inputs.iter().enumerate() {
+            if i > 0 {
+                w.write_str(", ")?;
             }
+            write!(w, "{}: ", param_name)?;
+            self.write_type(w, ty)?;
+        }
+        w.write_char(')')?;
 
-            let arg_strs: Vec<String> = args.iter().map(|arg| format_arg(index, arg)).collect();
+        if let Some(output) = &func.sig.output {
+            w.write_str(" -> ")?;
+            self.write_type(w, output)?;
+        }
 
-            if arg_strs.is_empty() {
-                format!("{}<...>", name)
-            } else {
-                format!("{}<{}>", name, arg_strs.join(", "))
+        // Calculate current length for where clause threshold
+        // This is approximate but good enough for the heuristic
+        let sig_len = name.len() + 10; // rough estimate
+        self.write_where_clause(w, &func.generics.where_predicates, sig_len)
+    }
+
+    /// Format generic args for a bound (no type name prefix).
+    /// Example: `<T>`, `<Item = usize>`
+    /// Private helper for internal use within format_generic_bound.
+    fn format_bound_args(&self, args: &GenericArgs) -> String {
+        let mut s = String::new();
+        let _ = self.write_bound_args(&mut s, args);
+        s
+    }
+
+    /// Write generic args for a type path.
+    fn write_type_args<W: Write>(&self, w: &mut W, name: &str, args: &GenericArgs) -> fmt::Result {
+        match args {
+            GenericArgs::AngleBracketed { args, constraints } => {
+                if args.is_empty() && constraints.is_empty() {
+                    return w.write_str(name);
+                }
+
+                w.write_str(name)?;
+                w.write_char('<')?;
+                self.write_angle_args(w, args)?;
+                w.write_char('>')
+            }
+            GenericArgs::Parenthesized { inputs, output } => {
+                w.write_str(name)?;
+                self.write_parenthesized_args(w, inputs, output.as_ref())
+            }
+            GenericArgs::ReturnTypeNotation => w.write_str(name),
+        }
+    }
+
+    /// Write generic args for a bound context (with constraints).
+    fn write_bound_args<W: Write>(&self, w: &mut W, args: &GenericArgs) -> fmt::Result {
+        match args {
+            GenericArgs::AngleBracketed { args, constraints } => {
+                if args.is_empty() && constraints.is_empty() {
+                    return Ok(());
+                }
+
+                w.write_char('<')?;
+                self.write_angle_args(w, args)?;
+
+                // Add constraints like Item = usize or Item: Clone
+                for (i, constraint) in constraints.iter().enumerate() {
+                    if !args.is_empty() || i > 0 {
+                        w.write_str(", ")?;
+                    }
+                    self.write_constraint(w, constraint)?;
+                }
+
+                w.write_char('>')
+            }
+            GenericArgs::Parenthesized { inputs, output } => {
+                self.write_parenthesized_args(w, inputs, output.as_ref())
+            }
+            GenericArgs::ReturnTypeNotation => w.write_str("(..)"),
+        }
+    }
+
+    /// Check if a path is from std/core/alloc (use short name).
+    fn is_std_path(path: &[String]) -> bool {
+        matches!(
+            path.first().map(String::as_str),
+            Some("std" | "core" | "alloc")
+        )
+    }
+
+    /// Write a resolved path type.
+    fn write_resolved_path<W: Write>(&self, w: &mut W, path: &Path) -> fmt::Result {
+        let Some(summary) = self.index.paths().get(&path.id) else {
+            return w.write_str("<type>");
+        };
+
+        let name = summary.path.last().map(String::as_str).unwrap_or("?");
+        match &path.args {
+            Some(args) => self.write_type_args(w, name, args.as_ref()),
+            None => w.write_str(name),
+        }
+    }
+
+    /// Write a borrowed reference type.
+    fn write_borrowed_ref<W: Write>(
+        &self,
+        w: &mut W,
+        lifetime: Option<&str>,
+        is_mutable: bool,
+        inner: &Type,
+    ) -> fmt::Result {
+        w.write_char('&')?;
+        if let Some(lt) = lifetime {
+            w.write_str(lt)?;
+            w.write_char(' ')?;
+        }
+        if is_mutable {
+            w.write_str("mut ")?;
+        }
+        self.write_type(w, inner)
+    }
+
+    /// Write angle-bracketed args (shared between type and bound contexts).
+    fn write_angle_args<W: Write>(&self, w: &mut W, args: &[GenericArg]) -> fmt::Result {
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                w.write_str(", ")?;
+            }
+            self.write_generic_arg(w, arg)?;
+        }
+        Ok(())
+    }
+
+    /// Write parenthesized args (shared between type and bound contexts).
+    fn write_parenthesized_args<W: Write>(
+        &self,
+        w: &mut W,
+        inputs: &[Type],
+        output: Option<&Type>,
+    ) -> fmt::Result {
+        w.write_char('(')?;
+        for (i, t) in inputs.iter().enumerate() {
+            if i > 0 {
+                w.write_str(", ")?;
+            }
+            self.write_type(w, t)?;
+        }
+        w.write_char(')')?;
+        if let Some(out) = output {
+            w.write_str(" -> ")?;
+            self.write_type(w, out)?;
+        }
+        Ok(())
+    }
+
+    /// Write a single generic argument.
+    fn write_generic_arg<W: Write>(&self, w: &mut W, arg: &GenericArg) -> fmt::Result {
+        match arg {
+            GenericArg::Lifetime(lt) => w.write_str(lt),
+            GenericArg::Type(t) => self.write_type(w, t),
+            GenericArg::Const(c) => write!(w, "{{{}}}", c.expr),
+            GenericArg::Infer => w.write_char('_'),
+        }
+    }
+
+    /// Write an associated item constraint (for bounds).
+    fn write_constraint<W: Write>(
+        &self,
+        w: &mut W,
+        constraint: &rustdoc_types::AssocItemConstraint,
+    ) -> fmt::Result {
+        match &constraint.binding {
+            AssocItemConstraintKind::Equality(term) => {
+                write!(w, "{} = ", constraint.name)?;
+                self.write_term(w, term)
+            }
+            AssocItemConstraintKind::Constraint(bounds) => {
+                write!(w, "{}: ", constraint.name)?;
+                for (i, b) in bounds.iter().enumerate() {
+                    if i > 0 {
+                        w.write_str(" + ")?;
+                    }
+                    w.write_str(&self.format_generic_bound(b))?;
+                }
+                Ok(())
             }
         }
-        GenericArgs::Parenthesized { inputs, output } => {
-            let input_strs: Vec<String> =
-                inputs.iter().map(|t| format_type_impl(index, t)).collect();
-            let mut result = format!("{}({})", name, input_strs.join(", "));
-            if let Some(out) = output {
-                result.push_str(" -> ");
-                result.push_str(&format_type_impl(index, out));
-            }
-            result
+    }
+
+    /// Write a Term (Type or Constant).
+    fn write_term<W: Write>(&self, w: &mut W, term: &Term) -> fmt::Result {
+        match term {
+            Term::Type(ty) => self.write_type(w, ty),
+            Term::Constant(c) => w.write_str(&c.expr),
         }
-        GenericArgs::ReturnTypeNotation => name.to_string(),
     }
-}
 
-/// Formats a single generic argument.
-fn format_arg(index: &CrateIndex, arg: &rustdoc_types::GenericArg) -> String {
-    match arg {
-        rustdoc_types::GenericArg::Lifetime(lt) => lt.clone(),
-        rustdoc_types::GenericArg::Type(t) => format_type_impl(index, t),
-        rustdoc_types::GenericArg::Const(c) => format!("{{{}}}", c.expr),
-        rustdoc_types::GenericArg::Infer => "_".to_string(),
+    /// Format a type for display. Private helper for internal string building.
+    fn format_type(&self, ty: &Type) -> String {
+        let mut s = String::new();
+        let _ = self.write_type(&mut s, ty);
+        s
     }
-}
 
-/// Formats a borrowed reference type.
-fn format_borrowed_ref(
-    index: &CrateIndex,
-    lifetime: Option<&str>,
-    is_mutable: bool,
-    inner: &Type,
-) -> String {
-    let mut s = String::with_capacity(32);
-    s.push('&');
-    if let Some(lt) = lifetime {
-        s.push_str(lt);
-        s.push(' ');
+    /// Format a path for use in bounds - short for std, qualified for external.
+    fn format_path_for_bound(&self, path: &Path) -> String {
+        let Some(summary) = self.index.paths().get(&path.id) else {
+            return "/* <path> */".to_string();
+        };
+
+        if Self::is_std_path(&summary.path) {
+            summary
+                .path
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "/* <path> */".to_string())
+        } else {
+            match (summary.path.first(), summary.path.last()) {
+                (Some(crate_name), Some(item_name)) if crate_name != item_name => {
+                    format!("{}::{}", crate_name, item_name)
+                }
+                (_, Some(name)) => name.clone(),
+                _ => "/* <path> */".to_string(),
+            }
+        }
     }
-    if is_mutable {
-        s.push_str("mut ");
+
+    /// Format a single generic bound.
+    fn format_generic_bound(&self, bound: &GenericBound) -> String {
+        match bound {
+            GenericBound::TraitBound {
+                trait_,
+                generic_params,
+                modifier,
+            } => {
+                let mut result = String::new();
+
+                // HRTB: for<'a>
+                if !generic_params.is_empty() {
+                    result.push_str("for<");
+                    let lifetimes: Vec<_> =
+                        generic_params.iter().map(|p| p.name.as_str()).collect();
+                    result.push_str(&lifetimes.join(", "));
+                    result.push_str("> ");
+                }
+
+                // Modifier: ?, ~const
+                match modifier {
+                    TraitBoundModifier::Maybe => result.push('?'),
+                    TraitBoundModifier::MaybeConst => result.push_str("~const "),
+                    TraitBoundModifier::None => {}
+                }
+
+                // Trait path with generic args
+                result.push_str(&self.format_path_for_bound(trait_));
+                if let Some(args) = &trait_.args {
+                    result.push_str(&self.format_bound_args(args));
+                }
+
+                result
+            }
+            GenericBound::Outlives(lifetime) => lifetime.clone(),
+            GenericBound::Use(_) => "/* <use> */".to_string(),
+        }
     }
-    s.push_str(&format_type_impl(index, inner));
-    s
+
+    /// Write a complete generic parameter with bounds and defaults.
+    fn write_generic_param_full<W: Write>(
+        &self,
+        w: &mut W,
+        param: &GenericParamDef,
+    ) -> fmt::Result {
+        match &param.kind {
+            GenericParamDefKind::Lifetime { outlives } => {
+                w.write_str(&param.name)?;
+                if !outlives.is_empty() {
+                    write!(w, ": {}", outlives.join(" + "))?;
+                }
+                Ok(())
+            }
+            GenericParamDefKind::Type {
+                bounds,
+                default,
+                is_synthetic: _,
+            } => {
+                w.write_str(&param.name)?;
+
+                if !bounds.is_empty() {
+                    w.write_str(": ")?;
+                    for (i, b) in bounds.iter().enumerate() {
+                        if i > 0 {
+                            w.write_str(" + ")?;
+                        }
+                        w.write_str(&self.format_generic_bound(b))?;
+                    }
+                }
+
+                if let Some(default_ty) = default {
+                    w.write_str(" = ")?;
+                    self.write_type(w, default_ty)?;
+                }
+                Ok(())
+            }
+            GenericParamDefKind::Const { type_, default } => {
+                write!(w, "const {}: ", param.name)?;
+                self.write_type(w, type_)?;
+                if let Some(default_val) = default {
+                    write!(w, " = {}", default_val)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Format a single where predicate.
+    fn format_where_predicate(&self, pred: &WherePredicate) -> String {
+        match pred {
+            WherePredicate::BoundPredicate {
+                type_,
+                bounds,
+                generic_params,
+            } => {
+                let mut result = String::new();
+
+                // HRTB: for<'a>
+                if !generic_params.is_empty() {
+                    result.push_str("for<");
+                    let params: Vec<_> = generic_params.iter().map(|p| p.name.as_str()).collect();
+                    result.push_str(&params.join(", "));
+                    result.push_str("> ");
+                }
+
+                result.push_str(&self.format_type(type_));
+                result.push_str(": ");
+
+                let bounds_str: Vec<_> = bounds
+                    .iter()
+                    .map(|b| self.format_generic_bound(b))
+                    .collect();
+                result.push_str(&bounds_str.join(" + "));
+
+                result
+            }
+            WherePredicate::LifetimePredicate { lifetime, outlives } => {
+                format!("{}: {}", lifetime, outlives.join(" + "))
+            }
+            WherePredicate::EqPredicate { lhs, rhs } => {
+                let mut s = self.format_type(lhs);
+                s.push_str(" = ");
+                let _ = self.write_term(&mut s, rhs);
+                s
+            }
+        }
+    }
 }

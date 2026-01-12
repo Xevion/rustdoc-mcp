@@ -225,14 +225,15 @@ impl CrateIndex {
 
     /// Returns all impl blocks for the given type ID.
     pub fn get_impls(&self, type_id: &Id) -> Vec<&Item> {
-        use crate::format::extract_id_from_type;
+        use rustdoc_types::Type;
         self.index
             .values()
             .filter(|item| {
                 if let ItemEnum::Impl(impl_item) = &item.inner {
-                    extract_id_from_type(&impl_item.for_)
-                        .map(|id| id == type_id)
-                        .unwrap_or(false)
+                    match &impl_item.for_ {
+                        Type::ResolvedPath(path) => path.id == *type_id,
+                        _ => false,
+                    }
                 } else {
                     false
                 }
@@ -242,16 +243,19 @@ impl CrateIndex {
 
     /// Finds all trait implementations for types matching the given name.
     pub fn find_trait_impls(&self, type_name: &str) -> Vec<TraitImplInfo> {
-        use crate::format::extract_id_from_type;
+        use rustdoc_types::Type;
         let mut impls = Vec::new();
 
         for item in self.index.values() {
             if let ItemEnum::Impl(impl_item) = &item.inner {
-                let for_type_matches = extract_id_from_type(&impl_item.for_)
-                    .and_then(|id| self.get_item(id))
-                    .and_then(|item| item.name.as_ref())
-                    .map(|name| name.contains(type_name))
-                    .unwrap_or(false);
+                let for_type_matches = match &impl_item.for_ {
+                    Type::ResolvedPath(path) => self
+                        .get_item(&path.id)
+                        .and_then(|item| item.name.as_ref())
+                        .map(|name| name.contains(type_name))
+                        .unwrap_or(false),
+                    _ => false,
+                };
 
                 if for_type_matches {
                     let trait_name = impl_item
@@ -316,8 +320,10 @@ impl CrateIndex {
 
         let mut output = format!("{} {}\n", kind, name);
 
-        if let Some(sig) = self.format_function_signature(item) {
-            output.push_str(&format!("{}\n", sig));
+        let fmt = TypeFormatter::new(self);
+        if matches!(item.inner, ItemEnum::Function(_)) {
+            let _ = fmt.write_function_signature(&mut output, item);
+            output.push('\n');
         }
 
         output.push_str(

@@ -20,12 +20,8 @@ pub struct InspectCrateRequest {
     pub crate_name: Option<String>,
 
     /// Detail level: low (counts only), medium (+ modules), high (+ top exports)
-    #[serde(default = "default_detail_level")]
+    #[serde(default)]
     pub detail_level: DetailLevel,
-}
-
-fn default_detail_level() -> DetailLevel {
-    DetailLevel::Medium
 }
 
 /// Handles inspect_crate requests by showing crate-level information.

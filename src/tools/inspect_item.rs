@@ -441,10 +441,10 @@ fn format_item_output(
             render_constant(&mut output, item, type_, detail_level, crate_name)
         }
         ItemEnum::Static(s) => render_static(&mut output, item, s, detail_level, crate_name),
-        _ => Err(format!("Unsupported item type: {:?}", item.inner())),
+        _ => return Err(format!("Unsupported item type: {:?}", item.inner())),
     };
 
-    result?;
+    result.map_err(|e| format!("Formatting error: {}", e))?;
     Ok(output)
 }
 

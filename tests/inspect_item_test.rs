@@ -255,3 +255,37 @@ async fn inspect_local_with_hyphenated_crate_name(isolated_workspace: IsolatedWo
     );
     check!(output.contains("WorkspaceContext"));
 }
+
+/// Test: Trait shows correct format in signature.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_trait_shows_signature(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "TypeFormatter".to_string(),
+        kind: Some(ItemKind::Trait),
+        detail_level: DetailLevel::Low,
+    };
+
+    let_assert!(
+        Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
+        "Should find TypeFormatter trait"
+    );
+    check!(output.contains("trait TypeFormatter"));
+}
+
+/// Test: Trait with generic lifetime shows generics in signature.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_trait_shows_generics(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "TypeFormatter".to_string(),
+        kind: Some(ItemKind::Trait),
+        detail_level: DetailLevel::Low,
+    };
+
+    let_assert!(
+        Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
+        "Should find TypeFormatter trait"
+    );
+    check!(output.contains("trait TypeFormatter"));
+}

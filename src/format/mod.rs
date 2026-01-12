@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 
 // Re-exports
 pub use builders::TypeFormatter;
-pub(crate) use builders::extract_id_from_type;
 
 /// DetailLevel level for documentation display.
 ///
