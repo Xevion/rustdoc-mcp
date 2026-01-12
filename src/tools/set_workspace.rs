@@ -32,7 +32,7 @@ pub(crate) async fn handle_set_workspace(
 
     // Canonicalize the path
     let canonical_path = tokio::fs::canonicalize(&path_buf).await.map_err(|e| {
-        tracing::warn!(path = %path, error = %e, "Failed to resolve workspace path");
+        tracing::warn!(path = %path, error = ?e, "Failed to resolve workspace path");
         anyhow!(
             "Failed to resolve path '{}': {}. Please check the path exists and is accessible.",
             path,

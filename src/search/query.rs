@@ -215,10 +215,10 @@ impl QueryContext {
             });
 
             if let Err(e) = result {
-                tracing::error!(crate_name, error = %e, "Failed to generate docs");
+                tracing::error!(crate_name, error = ?e, "Failed to generate docs");
                 return Err(LoadError::GenerationFailed {
                     crate_name: crate_name_typed,
-                    error: e.to_string(),
+                    reason: e.to_string(),
                 });
             }
         }
@@ -233,10 +233,10 @@ impl QueryContext {
 
         // Load the documentation (either existing or just generated)
         let crate_index = CrateIndex::load(&doc_path).map_err(|e| {
-            tracing::error!(crate_name, error = %e, "Failed to load docs");
-            LoadError::ParseError {
+            tracing::error!(crate_name, error = ?e, "Failed to load docs");
+            LoadError::ParseFailed {
                 crate_name: CrateName::new_unchecked(crate_name),
-                error: e.to_string(),
+                reason: e.to_string(),
             }
         })?;
 
@@ -361,9 +361,9 @@ impl QueryContext {
             );
 
             // Load directly from the JSON file without trying to regenerate
-            let crate_index = CrateIndex::load(&doc_path).map_err(|e| LoadError::ParseError {
+            let crate_index = CrateIndex::load(&doc_path).map_err(|e| LoadError::ParseFailed {
                 crate_name: CrateName::new_unchecked(crate_name),
-                error: e.to_string(),
+                reason: e.to_string(),
             })?;
 
             return Ok(self.cache_crate_index(crate_name, crate_index));

@@ -226,7 +226,7 @@ async fn handle_stdlib_search(
     let _crate_index = stdlib.load(&request.crate_name).await.map_err(|e| {
         tracing::error!(
             crate_name = %request.crate_name,
-            error = %e,
+            error = ?e,
             "Failed to load stdlib documentation"
         );
         format!("Failed to load {} documentation: {}", request.crate_name, e)

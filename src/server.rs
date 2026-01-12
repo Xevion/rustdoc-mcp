@@ -189,7 +189,7 @@ pub fn inline_schema_for_type<T: JsonSchema>() -> Arc<JsonObject> {
         Err(e) => {
             tracing::error!(
                 type_name = std::any::type_name::<T>(),
-                error = %e,
+                error = ?e,
                 "Failed to serialize schema, using fallback"
             );
             return create_fallback_schema();

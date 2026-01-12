@@ -265,14 +265,14 @@ impl TermIndex {
             {
                 Ok(mut file) => {
                     if let Err(e) = to_io(&terms, &mut file) {
-                        tracing::warn!(path = %path.display(), error = %e, "Failed to write search index");
+                        tracing::warn!(path = %path.display(), error = ?e, "Failed to write search index");
                         let _ = std::fs::remove_file(&path);
                     } else {
                         tracing::debug!(path = %path.display(), "Cached search index");
                     }
                 }
                 Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
-                    tracing::warn!(path = %path.display(), error = %e, "Failed to create index file");
+                    tracing::warn!(path = %path.display(), error = ?e, "Failed to create index file");
                 }
                 _ => {
                     // Already exists, another process may have created it

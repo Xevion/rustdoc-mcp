@@ -7,9 +7,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::borrow::{Borrow, Cow};
+use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+
+use crate::error::CrateNameError;
 
 /// Kind of type definition (struct, enum, or union).
 ///
@@ -79,6 +82,11 @@ impl fmt::Display for Visibility {
 ///
 /// This type stores both the normalized form (for lookups) and the original form
 /// (for display purposes).
+///
+/// # Equality and Hashing
+///
+/// Two `CrateName`s are equal if their normalized forms are equal. This means
+/// `serde-json` and `serde_json` are considered the same crate.
 ///
 /// # Examples
 ///
@@ -162,13 +170,13 @@ impl CrateName {
         // First character must be a letter or underscore
         let first = chars.next().unwrap();
         if !first.is_ascii_alphabetic() && first != '_' {
-            return Err(CrateNameError::InvalidStart(first));
+            return Err(CrateNameError::InvalidStart { character: first });
         }
 
         // Rest must be alphanumeric, underscore, or hyphen
         for ch in chars {
             if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' {
-                return Err(CrateNameError::InvalidChar(ch));
+                return Err(CrateNameError::InvalidCharacter { character: ch });
             }
         }
 
@@ -218,7 +226,7 @@ impl CrateName {
     }
 }
 
-// Equality based on normalized form
+// Equality based on normalized form only
 impl PartialEq for CrateName {
     fn eq(&self, other: &Self) -> bool {
         self.normalized == other.normalized
@@ -227,21 +235,23 @@ impl PartialEq for CrateName {
 
 impl Eq for CrateName {}
 
+// Hash based on normalized form only (must match PartialEq)
+impl Hash for CrateName {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.normalized.hash(state);
+    }
+}
+
+// Ordering based on normalized form only
 impl PartialOrd for CrateName {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for CrateName {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.normalized.cmp(&other.normalized)
-    }
-}
-
-impl Hash for CrateName {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.normalized.hash(state);
     }
 }
 
@@ -297,37 +307,6 @@ impl<'de> Deserialize<'de> for CrateName {
         CrateName::new(s).map_err(serde::de::Error::custom)
     }
 }
-
-/// Error type for invalid crate names.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CrateNameError {
-    /// Crate name is empty.
-    Empty,
-    /// Crate name starts with an invalid character.
-    InvalidStart(char),
-    /// Crate name contains an invalid character.
-    InvalidChar(char),
-}
-
-impl fmt::Display for CrateNameError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => write!(f, "crate name cannot be empty"),
-            Self::InvalidStart(ch) => {
-                write!(
-                    f,
-                    "crate name must start with a letter or underscore, got '{}'",
-                    ch
-                )
-            }
-            Self::InvalidChar(ch) => {
-                write!(f, "crate name contains invalid character '{}'", ch)
-            }
-        }
-    }
-}
-
-impl std::error::Error for CrateNameError {}
 
 #[cfg(test)]
 mod tests {
@@ -416,8 +395,6 @@ mod tests {
 
     #[test]
     fn test_crate_name_normalize() {
-        use std::borrow::Cow;
-
         // No allocation when no hyphens (returns borrowed)
         let result = CrateName::normalize("serde");
         check!(result == "serde");

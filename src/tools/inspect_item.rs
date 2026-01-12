@@ -345,7 +345,7 @@ pub async fn handle_inspect_item(
             query = %search_query,
             "Multiple matches found, returning disambiguation"
         );
-        return Err(format_disambiguation_error(
+        return Ok(format_disambiguation(
             &all_results,
             &search_query,
             crates_to_search.first().unwrap().as_str(),
@@ -393,14 +393,15 @@ pub async fn handle_inspect_item(
     format_item_output(item, request.detail_level, crate_name)
 }
 
-/// Format a disambiguation error when multiple items match
-fn format_disambiguation_error(
+/// Format disambiguation output when multiple items match
+fn format_disambiguation(
     results: &[DetailedSearchResult],
     query: &str,
     crate_name: &str,
 ) -> String {
     let mut error = format!(
-        "Multiple items found matching '{}'. Please be more specific:\n\n",
+        "
+// Multiple items found matching '{}'. Please be more specific:\n\n",
         query
     );
 

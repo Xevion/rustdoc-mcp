@@ -3,7 +3,7 @@
 //! This module provides hash types and digest computation for tracking when
 //! documentation needs regeneration based on file changes, version updates, or toolchain changes.
 
-use crate::error::Result;
+use crate::error::{ParseHashError, Result};
 use anyhow::Context;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -72,7 +72,7 @@ impl FromStr for Hash {
             let value = u64::from_str_radix(s, 16).map_err(|_| ParseHashError::InvalidHex)?;
             Ok(Hash::U64(value))
         } else {
-            Err(ParseHashError::InvalidLength(s.len()))
+            Err(ParseHashError::InvalidLength { length: s.len() })
         }
     }
 }
@@ -95,34 +95,6 @@ impl<'de> Deserialize<'de> for Hash {
         s.parse().map_err(serde::de::Error::custom)
     }
 }
-
-/// Error type for hash parsing failures
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParseHashError {
-    /// Invalid hexadecimal characters in the input
-    InvalidHex,
-    /// Invalid length (expected 16 or 64 hex characters)
-    InvalidLength(usize),
-}
-
-impl fmt::Display for ParseHashError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParseHashError::InvalidHex => {
-                write!(f, "invalid hexadecimal characters in hash string")
-            }
-            ParseHashError::InvalidLength(len) => {
-                write!(
-                    f,
-                    "invalid hash length: expected 16 or 64 hex characters, got {}",
-                    len
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ParseHashError {}
 
 /// Digest for tracking when documentation needs regeneration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,8 +328,8 @@ mod tests {
     #[case("abc", 3)]
     fn test_invalid_length(#[case] input: &str, #[case] len: usize) {
         let result = input.parse::<Hash>();
-        let_assert!(Err(ParseHashError::InvalidLength(actual_len)) = result);
-        check!(actual_len == len);
+        let_assert!(Err(ParseHashError::InvalidLength { length }) = result);
+        check!(length == len);
     }
 
     #[rstest]

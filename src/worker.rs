@@ -331,7 +331,7 @@ impl BackgroundWorker {
                 self.generate_uncached_docs(&workspace_info).await;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Background workspace detection failed");
+                tracing::warn!(error = ?e, "Background workspace detection failed");
             }
         }
     }
@@ -359,7 +359,7 @@ impl BackgroundWorker {
                     tracing::debug!(crate_name = %crate_name, "Background generated docs");
                 }
                 Err(e) => {
-                    tracing::warn!(crate_name = %crate_name, error = %e, "Background doc generation failed");
+                    tracing::warn!(crate_name = %crate_name, error = ?e, "Background doc generation failed");
                 }
             }
 

@@ -14,6 +14,11 @@ pub mod types;
 pub mod worker;
 pub mod workspace;
 
+// Re-export common types
+pub use error::{
+    ConfigError, CrateNameError, LoadError, ParseHashError, QueryError, Result, ToolError,
+    ValidationError,
+};
 pub use format::{DetailLevel, TypeFormatter};
 pub use search::{ItemKind, QueryContext};
 pub use types::CrateName;
