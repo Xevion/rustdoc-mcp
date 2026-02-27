@@ -122,6 +122,9 @@ pub struct CrateIndex {
 
 impl CrateIndex {
     /// Loads rustdoc JSON output and builds an index of all items.
+    ///
+    /// This is a synchronous, potentially CPU-intensive operation (reading + parsing
+    /// large JSON). Call it inside `tokio::task::spawn_blocking` when on an async task.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path)
@@ -142,6 +145,13 @@ impl CrateIndex {
             index,
             _external_crates: external_crates,
         })
+    }
+
+    /// Async wrapper around [`Self::load`] that offloads blocking I/O to a thread pool.
+    pub async fn load_async<P: AsRef<Path> + Send + 'static>(path: P) -> Result<Self> {
+        tokio::task::spawn_blocking(move || Self::load(path))
+            .await
+            .context("CrateIndex load task panicked")?
     }
 
     pub fn crate_info(&self) -> (Option<&str>, Option<&str>) {

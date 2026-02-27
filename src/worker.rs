@@ -18,7 +18,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::{Duration, interval};
+use tokio::time::{Duration, Instant, interval_at};
 
 /// Maximum number of parsed CrateIndex entries to keep in memory.
 const LRU_CACHE_SIZE: usize = 50;
@@ -130,10 +130,16 @@ impl DocState {
     /// 2. Checks for in-flight generation (awaits if found)
     /// 3. Starts new generation if needed
     pub async fn get_docs(&self, crate_name: &str) -> Result<Arc<CrateIndex>, String> {
+        // Normalize the name so hyphenated lookups (e.g. "rust-stemmers") correctly
+        // match entries stored under the normalized key ("rust_stemmers").
+        // CrateName::Borrow<str> returns the normalized form, so HashMap hashing is
+        // based on the normalized string — we must use the same form for lookups.
+        let key = CrateName::new_unchecked(crate_name);
+
         // 1. Check cache first
         {
             let mut cache = self.cache.write().await;
-            if let Some(index) = cache.get(crate_name) {
+            if let Some(index) = cache.get(&key) {
                 tracing::debug!(crate_name, "Cache hit");
                 return Ok(index.clone());
             }
@@ -142,7 +148,7 @@ impl DocState {
         // 2. Check for in-flight generation
         let maybe_future = {
             let in_flight = self.in_flight.lock().await;
-            in_flight.get(crate_name).cloned()
+            in_flight.get(&key).cloned()
         };
 
         if let Some(future) = maybe_future {
@@ -201,10 +207,12 @@ impl DocState {
         // Make it shared so multiple callers can await
         let shared_future = generation_future.shared();
 
+        let key = CrateName::new_unchecked(crate_name);
+
         // Store in in_flight map
         {
             let mut in_flight = self.in_flight.lock().await;
-            in_flight.insert(CrateName::new_unchecked(crate_name), shared_future.clone());
+            in_flight.insert(key.clone(), shared_future.clone());
         }
 
         tracing::info!(crate_name, "Starting documentation generation");
@@ -212,35 +220,53 @@ impl DocState {
         // Await the result
         let result = shared_future.await;
 
-        // Remove from in_flight
+        // Remove from in_flight. Must use the normalized CrateName key — removing with
+        // a raw &str containing hyphens (e.g. "rust-stemmers") would hash differently
+        // from the normalized key ("rust_stemmers") and silently miss.
         {
             let mut in_flight = self.in_flight.lock().await;
-            in_flight.remove(crate_name);
+            if in_flight.remove(&key).is_none() {
+                tracing::warn!(
+                    crate_name,
+                    normalized = key.normalized(),
+                    "in_flight entry was missing during removal — possible concurrent generation"
+                );
+            }
         }
 
         // Cache on success
         if let Ok(ref index) = result {
             let mut cache = self.cache.write().await;
-            cache.put(CrateName::new_unchecked(crate_name), index.clone());
-            tracing::debug!(crate_name, "Cached docs");
+            cache.put(key, index.clone());
+            tracing::debug!(crate_name, "Docs cached in memory");
+        } else if let Err(ref e) = result {
+            tracing::warn!(crate_name, error = %e, "Documentation generation failed");
         }
 
         result
     }
 
     /// Check if docs are cached for a crate.
+    ///
+    /// Uses the normalized crate name for the lookup so that hyphenated names
+    /// (e.g. "rust-stemmers") correctly hit entries stored under "rust_stemmers".
     pub async fn is_cached(&self, crate_name: &str) -> bool {
-        self.cache.read().await.contains(crate_name)
+        let key = CrateName::new_unchecked(crate_name);
+        self.cache.read().await.contains(&key)
     }
 
     /// Check if generation is in progress for a crate.
+    ///
+    /// Uses the normalized crate name so hyphenated lookups match correctly.
     pub async fn is_generating(&self, crate_name: &str) -> bool {
-        self.in_flight.lock().await.contains_key(crate_name)
+        let key = CrateName::new_unchecked(crate_name);
+        self.in_flight.lock().await.contains_key(&key)
     }
 
     /// Get a cached CrateIndex without triggering generation.
     pub async fn get_cached(&self, crate_name: &str) -> Option<Arc<CrateIndex>> {
-        self.cache.write().await.get(crate_name).cloned()
+        let key = CrateName::new_unchecked(crate_name);
+        self.cache.write().await.get(&key).cloned()
     }
 
     /// Put a CrateIndex directly into the cache.
@@ -266,10 +292,13 @@ impl BackgroundWorker {
     /// 1. Workspace detection (every 5 seconds)
     /// 2. Documentation pre-generation for discovered crates
     pub async fn run(&self) {
-        let mut ticker = interval(DETECTION_INTERVAL);
-
-        // Run detection immediately on start
+        // Run detection immediately on start, before the periodic loop begins.
         self.detect_and_generate().await;
+
+        // Use interval_at so the first tick fires DETECTION_INTERVAL after now,
+        // not immediately. tokio::interval() fires its first tick at T=0, which
+        // would cause a redundant detection right after the initial call above.
+        let mut ticker = interval_at(Instant::now() + DETECTION_INTERVAL, DETECTION_INTERVAL);
 
         loop {
             ticker.tick().await;
@@ -293,7 +322,8 @@ impl BackgroundWorker {
             .unwrap_or(true);
 
         if !workspace_changed {
-            // Workspace unchanged, maybe generate docs for crates that aren't cached
+            // Workspace unchanged — only generate docs for crates not yet cached
+            tracing::debug!(workspace = %workspace_path.display(), "Workspace unchanged, scanning for uncached crates");
             if let Some(workspace) = current_workspace {
                 self.generate_uncached_docs(&workspace).await;
             }
@@ -301,7 +331,7 @@ impl BackgroundWorker {
         }
 
         // 3. Configure the new workspace
-        tracing::debug!(workspace_path = %workspace_path.display(), "Detected workspace change");
+        tracing::info!(workspace_path = %workspace_path.display(), "Workspace change detected, reconfiguring");
 
         match handle_set_workspace(workspace_path.display().to_string(), None).await {
             Ok((canonical_path, workspace_info, _changed)) => {
@@ -339,27 +369,42 @@ impl BackgroundWorker {
     /// Generate docs for crates that aren't cached yet.
     async fn generate_uncached_docs(&self, workspace: &WorkspaceContext) {
         let prioritized = workspace.prioritized_crates();
+        let total = prioritized.len();
 
-        for crate_name in prioritized {
-            // Skip if already cached or generating
-            if self.state.is_cached(crate_name.as_str()).await
-                || self.state.is_generating(crate_name.as_str()).await
-            {
-                continue;
-            }
+        // Pre-scan to build a summary for the log line before doing any work.
+        let mut already_cached: u32 = 0;
+        let mut already_generating: u32 = 0;
+        let mut to_generate: Vec<CrateName> = Vec::new();
 
-            // Skip stdlib crates (handled separately)
+        for crate_name in &prioritized {
             if StdlibDocs::is_stdlib_crate(crate_name.as_str()) {
                 continue;
             }
+            if self.state.is_cached(crate_name.as_str()).await {
+                already_cached += 1;
+            } else if self.state.is_generating(crate_name.as_str()).await {
+                already_generating += 1;
+            } else {
+                to_generate.push(crate_name.clone());
+            }
+        }
 
+        tracing::debug!(
+            total,
+            cached = already_cached,
+            in_flight = already_generating,
+            pending = to_generate.len(),
+            "Documentation generation scan"
+        );
+
+        for crate_name in to_generate {
             // Generate docs (this will cache on success)
             match self.state.get_docs(crate_name.as_str()).await {
                 Ok(_) => {
-                    tracing::debug!(crate_name = %crate_name, "Background generated docs");
+                    tracing::info!(crate_name = %crate_name, "Background documentation ready");
                 }
                 Err(e) => {
-                    tracing::warn!(crate_name = %crate_name, error = ?e, "Background doc generation failed");
+                    tracing::warn!(crate_name = %crate_name, error = %e, "Background doc generation failed");
                 }
             }
 

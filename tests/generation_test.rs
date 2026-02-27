@@ -38,7 +38,7 @@ async fn generate_docs_with_hyphenated_name() {
     let name = CrateName::new_unchecked("tracing-attributes");
 
     assert!(
-        (generate_docs(&name, Some("0.1.30"), &workspace_root).await).is_ok(),
+        (generate_docs(&name, Some("0.1.30"), &workspace_root, false).await).is_ok(),
         "Should succeed"
     );
 }
@@ -52,7 +52,7 @@ async fn generate_docs_with_normalized_name() {
 
     // Should succeed by looking up "tracing-attributes" from Cargo.lock
     assert!(
-        (generate_docs(&name, Some("0.1.30"), &workspace_root).await).is_ok(),
+        (generate_docs(&name, Some("0.1.30"), &workspace_root, false).await).is_ok(),
         "Should work with normalized name"
     );
 }
