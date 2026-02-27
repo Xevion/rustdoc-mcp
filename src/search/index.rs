@@ -42,15 +42,36 @@ impl InvertedIndex {
             return vec![];
         }
 
-        // Collect results from all tokens, combining scores for documents that match multiple
+        // Collect results from all tokens, combining scores for documents that match multiple.
+        // Also track how many distinct tokens each document matched.
         let mut combined_scores: HashMap<usize, f32> = HashMap::new();
+        let mut token_match_counts: HashMap<usize, usize> = HashMap::new();
 
         for token in &tokens {
             let term_hash = hash_term(token);
             if let Some(results) = self.terms.get(&term_hash) {
                 for (doc_idx, score) in results {
                     *combined_scores.entry(*doc_idx).or_insert(0.0) += score;
+                    *token_match_counts.entry(*doc_idx).or_insert(0) += 1;
                 }
+            }
+        }
+
+        // Apply a quadratic coverage penalty only for multi-word (space-separated) queries.
+        // When the user types "cache invalidation", items that only match "invalid" (not
+        // "cache") should rank below items matching both words. The penalty is (matched/total)^2,
+        // so a document matching 1 of 2 words gets a 0.25× multiplier.
+        //
+        // We do NOT apply this penalty for single-identifier queries like "TypeFormatter" or
+        // path queries like "serde::Serialize" — those produce multiple tokens via CamelCase
+        // splitting, but every token comes from the same user-supplied name, so partial matches
+        // are still meaningful and penalizing them would cause real items to drop out of results.
+        let total_tokens = tokens.len() as f32;
+        if query.contains(' ') && total_tokens > 1.0 {
+            for (doc_idx, score) in combined_scores.iter_mut() {
+                let matched = token_match_counts.get(doc_idx).copied().unwrap_or(0) as f32;
+                let coverage = matched / total_tokens;
+                *score *= coverage * coverage;
             }
         }
 
@@ -290,4 +311,71 @@ fn build_index(root_item: ItemRef<'_, Item>) -> InvertedIndex {
     let mut builder = TermBuilder::default();
     builder.recurse(root_item, &[], false);
     builder.finalize()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert2::check;
+
+    /// Build a minimal InvertedIndex directly from (token, doc_idx, score) triples.
+    /// Useful for testing scoring behavior without a real crate loaded.
+    fn make_index(entries: Vec<(&str, usize, f32)>, doc_count: usize) -> InvertedIndex {
+        let mut terms: HashMap<TermHash, Vec<(usize, f32)>> = HashMap::new();
+        for (token, doc_idx, score) in entries {
+            terms
+                .entry(hash_term(token))
+                .or_default()
+                .push((doc_idx, score));
+        }
+        // Sort each bucket by score descending (as the real index does)
+        for bucket in terms.values_mut() {
+            bucket.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+        }
+        // IDs: each doc gets a singleton path [doc_idx as u32]
+        let ids: Vec<Vec<u32>> = (0..doc_count).map(|i| vec![i as u32]).collect();
+        InvertedIndex::new(terms, ids)
+    }
+
+    /// Stem a single word using the same stemmer the index uses.
+    fn stem(word: &str) -> String {
+        let stemmer = Stemmer::create(Algorithm::English);
+        tokenize_and_stem(word, &stemmer)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| word.to_string())
+    }
+
+    /// When a multi-word query is issued, a document matching ALL query tokens should
+    /// rank above one that matches only a subset, even if the partial-match document has
+    /// a higher raw TF-IDF score for its single matching token.
+    ///
+    /// Without a coverage penalty, "cache invalidation" can surface items named
+    /// "InvalidCharacter" (which match only the "invalid" stem with a high score) above
+    /// the actual cache module (which matches both "cach" and "invalid" with lower scores).
+    #[test]
+    fn full_match_ranks_above_partial_match() {
+        let cach = stem("cache");
+        let invalid = stem("invalidation");
+
+        // Doc 0: "cache_invalidation" — matches both stems (full match, low raw scores)
+        // Doc 1: "invalid_char"       — matches only "invalid" with a much higher raw score
+        let index = make_index(
+            vec![
+                (&cach, 0, 0.5),    // doc 0 contributes "cach"
+                (&invalid, 0, 0.5), // doc 0 contributes "invalid"
+                (&invalid, 1, 2.0), // doc 1 contributes "invalid" with 4x the score
+            ],
+            2,
+        );
+
+        let results = index.search("cache invalidation", 10);
+        check!(!results.is_empty(), "Should return at least one result");
+        check!(
+            results[0].0 == vec![0u32],
+            "Full match (doc 0) should rank above partial match (doc 1), \
+             but top result was doc {:?}",
+            results[0].0
+        );
+    }
 }

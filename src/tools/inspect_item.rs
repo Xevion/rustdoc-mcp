@@ -169,6 +169,8 @@ pub async fn handle_inspect_item(
     // Search across all target crates using TF-IDF
     let mut all_results = Vec::new();
     let mut search_failures = Vec::new();
+    // Tracks the actual kinds of items excluded by the kind filter, for error hints.
+    let mut kind_filtered_kinds: Vec<String> = Vec::new();
 
     // Limit total results to prevent unbounded memory growth
     const MAX_TOTAL_RESULTS: usize = 500;
@@ -195,14 +197,18 @@ pub async fn handle_inspect_item(
                     "Failed to load search index for crate"
                 );
 
-                // Track for user-facing error messages
-                let error_msg = if suggestions.is_empty() {
-                    "Documentation not found or failed to load".to_string()
-                } else {
+                // Track for user-facing error messages.
+                // Suppress "did you mean" suggestions for stdlib crates — they always
+                // suggest the workspace crate, which is misleading noise.
+                let error_msg = if !suggestions.is_empty()
+                    && !StdlibDocs::is_stdlib_crate(crate_name.as_str())
+                {
                     format!(
                         "Documentation not found (did you mean: {}?)",
                         suggestions.first().map(|s| s.path.as_str()).unwrap_or("")
                     )
+                } else {
+                    "Documentation not available".to_string()
                 };
                 search_failures.push((crate_name.as_str().to_string(), error_msg));
                 continue;
@@ -227,6 +233,7 @@ pub async fn handle_inspect_item(
                 if let Some(kind_filter) = request.kind
                     && !matches_kind(item_ref.inner(), kind_filter)
                 {
+                    kind_filtered_kinds.push(item_kind_str(item_ref.inner()).to_string());
                     continue;
                 }
 
@@ -310,6 +317,19 @@ pub async fn handle_inspect_item(
                 String::new()
             }
         );
+
+        // When kind filtering excluded results, tell the user what kinds were actually found.
+        if !kind_filtered_kinds.is_empty() {
+            let mut unique_kinds = kind_filtered_kinds.clone();
+            unique_kinds.sort();
+            unique_kinds.dedup();
+            let _ = write!(
+                &mut error_msg,
+                "\nHowever, '{}' was found as: {}",
+                search_query,
+                unique_kinds.join(", ")
+            );
+        }
 
         // Add failure context if crates failed to load
         if !search_failures.is_empty() {
@@ -459,7 +479,18 @@ fn format_item_output(
             render_constant(&mut output, item, type_, detail_level, crate_name)
         }
         ItemEnum::Static(s) => render_static(&mut output, item, s, detail_level, crate_name),
-        _ => return Err(format!("Unsupported item type: {:?}", item.inner())),
+        ItemEnum::Macro(_) | ItemEnum::ProcMacro(_) => {
+            return Err(format!(
+                "'{}' is a macro; macros are not currently supported by inspect_item",
+                item.name().unwrap_or("unknown")
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "Unsupported item type: {}",
+                crate::search::item_kind_str(item.inner())
+            ));
+        }
     };
 
     result.map_err(|e| format!("Formatting error: {}", e))?;

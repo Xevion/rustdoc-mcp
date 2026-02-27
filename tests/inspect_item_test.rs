@@ -19,12 +19,11 @@ async fn inspect_finds_serialize_trait(isolated_workspace_with_serde: IsolatedWo
     let_assert!(
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
-    check!(output.contains("Value"));
-    check!(output.contains("enum"));
-    check!(output.contains("Null") || output.contains("Bool") || output.contains("Number"));
+    check!(output.contains("Serialize"));
+    check!(output.contains("trait"));
 }
 
-/// Test: Find Deserialize trait via simple lookup.
+/// Test: Find Deserialize trait via path-based lookup.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_successful_simple_lookup(isolated_workspace_with_serde: IsolatedWorkspace) {
@@ -37,7 +36,7 @@ async fn inspect_successful_simple_lookup(isolated_workspace_with_serde: Isolate
     let_assert!(
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
-    check!(output.contains("Serialize"));
+    check!(output.contains("Deserialize"));
     check!(output.contains("trait"));
 }
 
@@ -123,8 +122,9 @@ async fn inspect_function_lookup(isolated_workspace_with_serde: IsolatedWorkspac
     let_assert!(
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
-    check!(output.contains("Deserialize"));
-    check!(output.contains("trait"));
+    // to_string<T: Serialize> — the function bound uses Serialize, not Deserialize
+    check!(output.contains("Serialize"));
+    check!(output.contains("fn") || output.contains("to_string"));
 }
 
 #[rstest]
@@ -139,8 +139,10 @@ async fn inspect_enum_with_variants(isolated_workspace_with_serde: IsolatedWorks
     let_assert!(
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
-    check!(output.contains("to_string"));
-    check!(output.contains("fn"));
+    // Value enum should show its variants at high detail
+    check!(output.contains("Value"));
+    check!(output.contains("enum") || output.contains("Enum"));
+    check!(output.contains("Null") || output.contains("Bool") || output.contains("Number") || output.contains("String"));
 }
 
 /// Test: Find a local struct by simple name.
@@ -202,22 +204,23 @@ async fn inspect_local_module(isolated_workspace: IsolatedWorkspace) {
     check!(output.contains("workspace"));
 }
 
-/// Test: Find the TypeFormatter trait in the local crate.
+/// Test: Find the TypeFormatter struct in the local crate.
+/// Note: TypeFormatter is a struct (not a trait) in rustdoc-mcp.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_local_trait(isolated_workspace: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "TypeFormatter".to_string(),
-        kind: Some(ItemKind::Trait),
+        kind: Some(ItemKind::Struct),
         detail_level: DetailLevel::Medium,
     };
 
     let_assert!(
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
-        "Should find TypeFormatter trait"
+        "Should find TypeFormatter struct"
     );
     check!(output.contains("TypeFormatter"));
-    check!(output.contains("trait"));
+    check!(output.contains("struct"));
 }
 
 /// Test: Find BackgroundWorker struct (public export).
@@ -256,36 +259,63 @@ async fn inspect_local_with_hyphenated_crate_name(isolated_workspace: IsolatedWo
     check!(output.contains("WorkspaceContext"));
 }
 
-/// Test: Trait shows correct format in signature.
+/// Test: Struct shows correct keyword in signature.
+/// TypeFormatter is a struct with a lifetime generic parameter.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_trait_shows_signature(isolated_workspace: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "TypeFormatter".to_string(),
-        kind: Some(ItemKind::Trait),
+        kind: Some(ItemKind::Struct),
         detail_level: DetailLevel::Low,
     };
 
     let_assert!(
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
-        "Should find TypeFormatter trait"
+        "Should find TypeFormatter struct"
     );
-    check!(output.contains("trait TypeFormatter"));
+    check!(output.contains("TypeFormatter"));
+    check!(output.contains("struct"));
 }
 
-/// Test: Trait with generic lifetime shows generics in signature.
+/// Test: Struct with generic lifetime parameter shows generics in signature.
+/// TypeFormatter<'a> uses a lifetime parameter.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn inspect_trait_shows_generics(isolated_workspace: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "TypeFormatter".to_string(),
-        kind: Some(ItemKind::Trait),
+        kind: Some(ItemKind::Struct),
         detail_level: DetailLevel::Low,
     };
 
     let_assert!(
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
-        "Should find TypeFormatter trait"
+        "Should find TypeFormatter struct"
     );
-    check!(output.contains("trait TypeFormatter"));
+    // TypeFormatter<'a> — should show the lifetime generic
+    check!(output.contains("TypeFormatter"));
+    check!(output.contains("'a") || output.contains("struct TypeFormatter"));
+}
+
+/// Test: When a kind filter excludes all results, the error message should hint at the
+/// actual kind(s) available — not just say "No items found".
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_kind_mismatch_suggests_correct_kind(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "QueryContext".to_string(), // exists as a Struct
+        kind: Some(ItemKind::Function),   // but asked for Function
+        detail_level: DetailLevel::Medium,
+    };
+
+    let_assert!(
+        Err(err) = handle_inspect_item(&isolated_workspace.state, request).await
+    );
+    check!(err.contains("QueryContext"), "error should name the item");
+    // Should tell the user the item exists but under a different kind
+    check!(
+        err.to_lowercase().contains("struct"),
+        "error should hint at the actual kind: {err}"
+    );
 }

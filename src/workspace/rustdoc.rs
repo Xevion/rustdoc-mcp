@@ -84,6 +84,9 @@ pub(crate) async fn get_docs(
 
 /// Invokes `cargo +nightly rustdoc` to generate JSON documentation.
 /// Requires nightly toolchain. Validates inputs to prevent command injection.
+///
+/// If the crate name is normalized (underscores), looks up the original hyphenated form
+/// in `workspace_root/Cargo.lock` because cargo requires the hyphenated package name.
 pub async fn generate_docs(
     crate_name: &CrateName,
     version: Option<&str>,
@@ -94,10 +97,29 @@ pub async fn generate_docs(
         validate_version(ver)?;
     }
 
+    // Cargo requires the original hyphenated package name (e.g. "tracing-attributes"),
+    // not the underscore-normalized form. Look it up from Cargo.lock if available.
+    let canonical_name: String = {
+        let lock_path = workspace_root.join("Cargo.lock");
+        if lock_path.exists() {
+            if let Ok(crates) = parse_cargo_lock(&lock_path).await {
+                // Cargo.lock keys are normalized (underscores); look up the original name
+                crates
+                    .get(crate_name.normalized())
+                    .map(|pkg| pkg.name.as_str().to_string())
+                    .unwrap_or_else(|| crate_name.as_str().to_string())
+            } else {
+                crate_name.as_str().to_string()
+            }
+        } else {
+            crate_name.as_str().to_string()
+        }
+    };
+
     let package_spec = if let Some(ver) = version {
-        format!("{}@{}", crate_name, ver)
+        format!("{}@{}", canonical_name, ver)
     } else {
-        crate_name.to_string()
+        canonical_name.clone()
     };
 
     let output = tokio::process::Command::new("cargo")

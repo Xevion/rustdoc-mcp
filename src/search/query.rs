@@ -135,6 +135,9 @@ pub struct QueryContext {
     arena: Bump,
     /// Per-query cache of loaded documentation indices
     doc_cache: RefCell<HashMap<CrateName, ArenaPtr<CrateIndex>>>,
+    /// Negative cache: crate names for which doc generation already failed this session.
+    /// Prevents retrying expensive cargo rustdoc invocations for the same crate.
+    failed_crates: RefCell<std::collections::HashSet<String>>,
 }
 
 impl Debug for QueryContext {
@@ -142,6 +145,7 @@ impl Debug for QueryContext {
         f.debug_struct("QueryContext")
             .field("workspace", &self.workspace.root)
             .field("doc_cache_len", &self.doc_cache.borrow().len())
+            .field("failed_crates_len", &self.failed_crates.borrow().len())
             .finish()
     }
 }
@@ -153,7 +157,14 @@ impl QueryContext {
             workspace,
             arena: Bump::new(),
             doc_cache: RefCell::new(HashMap::new()),
+            failed_crates: RefCell::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// Returns true if documentation generation for this crate failed earlier in this
+    /// query context's lifetime. Used to skip redundant retry attempts.
+    pub fn is_generation_failed(&self, crate_name: &str) -> bool {
+        self.failed_crates.borrow().contains(crate_name)
     }
 
     /// Get the workspace root directory.
@@ -216,6 +227,9 @@ impl QueryContext {
 
             if let Err(e) = result {
                 tracing::error!(crate_name, error = ?e, "Failed to generate docs");
+                self.failed_crates
+                    .borrow_mut()
+                    .insert(crate_name.to_string());
                 return Err(LoadError::GenerationFailed {
                     crate_name: crate_name_typed,
                     reason: e.to_string(),

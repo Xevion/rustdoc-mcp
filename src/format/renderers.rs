@@ -47,7 +47,14 @@ pub(crate) fn render_struct(
     if matches!(detail_level, DetailLevel::High) {
         writeln!(output, "\nFields:")?;
         match &s.kind {
-            rustdoc_types::StructKind::Plain { fields, .. } => {
+            rustdoc_types::StructKind::Plain {
+                fields,
+                has_stripped_fields,
+            } => {
+                // TODO: when `has_stripped_fields` is true and no public fields are rendered,
+                // emit a note like "(N private fields not shown)" so the caller knows why
+                // Fields: is empty. Currently an all-private struct silently shows nothing.
+                let _ = has_stripped_fields;
                 for field_id in fields {
                     if let Some(field_item) = item.get(field_id)
                         && let ItemEnum::StructField(ty) = field_item.inner()

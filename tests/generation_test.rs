@@ -118,12 +118,9 @@ fn query_context_has_negative_cache_api() {
 
     let query_ctx = QueryContext::new(workspace);
 
-    // BUG: This method doesn't exist yet
-    // Once implemented, uncomment and remove the panic:
-    // check!(!query_ctx.is_generation_failed("some_crate"));
-
-    let _ = query_ctx;
-    panic!("QueryContext needs is_generation_failed() for negative caching");
+    // Verify the negative-cache API exists and starts empty
+    check!(!query_ctx.is_generation_failed("some_crate"));
+    check!(!query_ctx.is_generation_failed("another_crate"));
 }
 
 #[rstest]
