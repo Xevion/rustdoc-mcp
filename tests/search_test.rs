@@ -1,7 +1,10 @@
 mod common;
 
 use assert2::{assert, check, let_assert};
-use common::{IsolatedWorkspace, isolated_workspace, isolated_workspace_with_serde, warm_cache};
+use common::{
+    IsolatedWorkspace, isolated_workspace, isolated_workspace_with_anyhow,
+    isolated_workspace_with_serde, warm_cache,
+};
 use rstest::rstest;
 use rustdoc_mcp::tools::search::{SearchRequest, handle_search};
 
@@ -472,4 +475,86 @@ async fn concurrent_mixed_operations(isolated_workspace: IsolatedWorkspace) {
         let result = handle.await.expect("Search should not panic");
         check!(result.is_ok(), "Search {} should succeed: {:?}", i, result);
     }
+}
+
+// --- Bug: External dependency search broken ---
+// The search index should contain entries for external dependency crates like anyhow.
+// Currently, search returns no results for anyhow despite inspect_crate showing 65+ items.
+
+/// Test: Search finds Error struct in anyhow crate.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn search_finds_anyhow_error(isolated_workspace_with_anyhow: IsolatedWorkspace) {
+    let request = SearchRequest {
+        query: "Error".to_string(),
+        crate_name: "anyhow".to_string(),
+        limit: Some(10),
+    };
+
+    let_assert!(
+        Ok(output) = handle_search(&isolated_workspace_with_anyhow.state, request).await,
+        "Search in anyhow should succeed"
+    );
+    check!(
+        !output.contains("No results found"),
+        "Should find results for 'Error' in anyhow: {}",
+        output
+    );
+    check!(
+        output.contains("Error"),
+        "Should find Error in anyhow results: {}",
+        output
+    );
+}
+
+/// Test: Search finds Context trait in anyhow crate.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn search_finds_anyhow_context(isolated_workspace_with_anyhow: IsolatedWorkspace) {
+    let request = SearchRequest {
+        query: "Context".to_string(),
+        crate_name: "anyhow".to_string(),
+        limit: Some(10),
+    };
+
+    let_assert!(
+        Ok(output) = handle_search(&isolated_workspace_with_anyhow.state, request).await,
+        "Search in anyhow should succeed"
+    );
+    check!(
+        !output.contains("No results found"),
+        "Should find results for 'Context' in anyhow: {}",
+        output
+    );
+    check!(
+        output.contains("Context"),
+        "Should find Context trait in anyhow results: {}",
+        output
+    );
+}
+
+/// Test: Search finds Result type alias in anyhow crate.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn search_finds_anyhow_result(isolated_workspace_with_anyhow: IsolatedWorkspace) {
+    let request = SearchRequest {
+        query: "Result".to_string(),
+        crate_name: "anyhow".to_string(),
+        limit: Some(10),
+    };
+
+    let_assert!(
+        Ok(output) = handle_search(&isolated_workspace_with_anyhow.state, request).await,
+        "Search in anyhow should succeed"
+    );
+    check!(
+        !output.contains("No results found"),
+        "Should find results for 'Result' in anyhow: {}",
+        output
+    );
+    check!(
+        output.contains("Result"),
+        "Should find Result type alias in anyhow results: {}",
+        output
+    );
 }

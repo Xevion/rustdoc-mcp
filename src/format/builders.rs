@@ -281,12 +281,32 @@ impl<'a> TypeFormatter<'a> {
     }
 
     /// Write a resolved path type.
+    ///
+    /// For std/core/alloc types, uses the short name (e.g. `Result`).
+    /// For external crate types, qualifies with the crate name (e.g. `anyhow::Result`)
+    /// to avoid tautological displays like `type Result<T> = Result<T>`.
     fn write_resolved_path<W: Write>(&self, w: &mut W, path: &Path) -> fmt::Result {
         let Some(summary) = self.index.paths().get(&path.id) else {
             return w.write_str("<type>");
         };
 
-        let name = summary.path.last().map(String::as_str).unwrap_or("?");
+        let name = if Self::is_std_path(&summary.path) {
+            summary.path.last().map(String::as_str).unwrap_or("?")
+        } else {
+            // For external types, return a qualified name to avoid ambiguity
+            match (summary.path.first(), summary.path.last()) {
+                (Some(crate_name), Some(item_name)) if crate_name != item_name => {
+                    // Write qualified name inline and return early
+                    let qualified = format!("{crate_name}::{item_name}");
+                    return match &path.args {
+                        Some(args) => self.write_type_args(w, &qualified, args.as_ref()),
+                        None => w.write_str(&qualified),
+                    };
+                }
+                _ => summary.path.last().map(String::as_str).unwrap_or("?"),
+            }
+        };
+
         match &path.args {
             Some(args) => self.write_type_args(w, name, args.as_ref()),
             None => w.write_str(name),

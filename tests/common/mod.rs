@@ -340,6 +340,15 @@ pub fn isolated_workspace_with_serde() -> IsolatedWorkspace {
     IsolatedWorkspace::with_deps(&["rustdoc-mcp", "serde", "serde_json", "serde_core"])
 }
 
+/// Creates an isolated workspace with anyhow dependency for testing.
+///
+/// Same as `isolated_workspace` but also includes the anyhow crate.
+/// Used for testing external dependency search and type alias resolution.
+#[fixture]
+pub fn isolated_workspace_with_anyhow() -> IsolatedWorkspace {
+    IsolatedWorkspace::with_deps(&["rustdoc-mcp", "anyhow"])
+}
+
 /// Creates an `Arc<DocState>` using the real project directory (shared state).
 ///
 /// **Use with caution!** This fixture uses the actual `target/doc/` directory,

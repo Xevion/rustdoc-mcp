@@ -291,17 +291,21 @@ impl CrateIndex {
     }
 
     pub fn public_functions(&self) -> Vec<&Item> {
-        self.index
+        let mut items: Vec<_> = self
+            .index
             .values()
             .filter(|item| {
                 matches!(item.inner, ItemEnum::Function(_))
                     && matches!(item.visibility, rustdoc_types::Visibility::Public)
             })
-            .collect()
+            .collect();
+        items.sort_by_key(|item| item.name.as_deref().unwrap_or(""));
+        items
     }
 
     pub fn public_types(&self) -> Vec<&Item> {
-        self.index
+        let mut items: Vec<_> = self
+            .index
             .values()
             .filter(|item| {
                 matches!(
@@ -309,17 +313,22 @@ impl CrateIndex {
                     ItemEnum::Struct(_) | ItemEnum::Enum(_) | ItemEnum::TypeAlias(_)
                 ) && matches!(item.visibility, rustdoc_types::Visibility::Public)
             })
-            .collect()
+            .collect();
+        items.sort_by_key(|item| item.name.as_deref().unwrap_or(""));
+        items
     }
 
     pub fn public_traits(&self) -> Vec<&Item> {
-        self.index
+        let mut items: Vec<_> = self
+            .index
             .values()
             .filter(|item| {
                 matches!(item.inner, ItemEnum::Trait(_))
                     && matches!(item.visibility, rustdoc_types::Visibility::Public)
             })
-            .collect()
+            .collect();
+        items.sort_by_key(|item| item.name.as_deref().unwrap_or(""));
+        items
     }
 
     pub fn format_item(&self, item: &Item) -> String {

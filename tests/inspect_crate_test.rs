@@ -228,9 +228,9 @@ async fn inspect_crate_exports_structure(isolated_workspace: IsolatedWorkspace) 
     );
 
     // At least one known public type should be visible in the Types section.
-    // DetailLevel and TypeFormatter are both public types exported from rustdoc-mcp.
+    // Types are sorted alphabetically, so early-alphabet types appear first.
     check!(
-        output.contains("DetailLevel") || output.contains("TypeFormatter") || output.contains("ItemRef"),
+        output.contains("BackgroundWorker") || output.contains("ChildIterator") || output.contains("ConfigError"),
         "At least one known public type should be visible: {}",
         output
     );

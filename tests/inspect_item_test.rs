@@ -1,7 +1,10 @@
 mod common;
 
 use assert2::{check, let_assert};
-use common::{IsolatedWorkspace, isolated_workspace, isolated_workspace_with_serde};
+use common::{
+    IsolatedWorkspace, isolated_workspace, isolated_workspace_with_anyhow,
+    isolated_workspace_with_serde,
+};
 use rstest::rstest;
 use rustdoc_mcp::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
 use rustdoc_mcp::{DetailLevel, ItemKind};
@@ -317,5 +320,97 @@ async fn inspect_kind_mismatch_suggests_correct_kind(isolated_workspace: Isolate
     check!(
         err.to_lowercase().contains("struct"),
         "error should hint at the actual kind: {err}"
+    );
+}
+
+// --- Bug: Ambiguous Result not disambiguated ---
+// When querying bare "Result" without a kind filter, and multiple crates define
+// a type named "Result", the tool should show a disambiguation list rather than
+// silently auto-resolving to the workspace type alias.
+
+/// Test: Bare "Result" query with multiple matches shows disambiguation.
+///
+/// Both rustdoc-mcp (type alias) and anyhow (type alias) define "Result".
+/// The user should see a disambiguation prompt listing both, not a silent
+/// auto-resolution to the workspace item.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_bare_result_shows_disambiguation(
+    isolated_workspace_with_anyhow: IsolatedWorkspace,
+) {
+    let request = InspectItemRequest {
+        query: "Result".to_string(),
+        kind: None, // no kind filter — should trigger disambiguation
+        detail_level: DetailLevel::Medium,
+    };
+
+    let result = handle_inspect_item(&isolated_workspace_with_anyhow.state, request).await;
+    let_assert!(Ok(output) = result, "Should succeed, not error");
+
+    // Should show multiple matches, not silently pick one
+    // Disambiguation output should mention both crates
+    check!(
+        output.contains("Multiple") || output.contains("multiple") || output.contains("Did you mean"),
+        "Should indicate multiple matches exist for bare 'Result': {}",
+        output
+    );
+
+    // Should mention both the workspace and anyhow versions
+    check!(
+        output.contains("rustdoc_mcp") || output.contains("rustdoc-mcp"),
+        "Disambiguation should mention workspace crate: {}",
+        output
+    );
+    check!(
+        output.contains("anyhow"),
+        "Disambiguation should mention anyhow crate: {}",
+        output
+    );
+}
+
+// --- Bug: Type alias expansion opaque ---
+// Type alias rendering should show the fully-qualified target type.
+// Currently `type Result<T> = Result<T>` hides that the target is `anyhow::Result<T>`.
+
+/// Test: Type alias for Result shows the qualified target type.
+///
+/// `rustdoc_mcp::Result` is defined as `type Result<T> = anyhow::Result<T>`.
+/// The rendered output should show the qualified path of the target, not just
+/// the unqualified name (which is identical to the alias name).
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_type_alias_shows_qualified_target(
+    isolated_workspace_with_anyhow: IsolatedWorkspace,
+) {
+    let request = InspectItemRequest {
+        query: "rustdoc_mcp::Result".to_string(),
+        kind: Some(ItemKind::TypeAlias),
+        detail_level: DetailLevel::Medium,
+    };
+
+    let_assert!(
+        Ok(output) = handle_inspect_item(&isolated_workspace_with_anyhow.state, request).await,
+        "Should find rustdoc_mcp::Result type alias"
+    );
+
+    // The output should show the fully-qualified target type
+    // i.e., "type Result<T> = anyhow::Result<T>" or similar
+    // NOT the tautological "type Result<T> = Result<T>"
+    check!(
+        output.contains("anyhow"),
+        "Type alias RHS should show qualified target (anyhow::Result), not bare Result: {}",
+        output
+    );
+
+    // Verify it doesn't show the tautological form
+    // Look for "= Result<" without a crate qualifier before it
+    let has_tautological = output.lines().any(|line| {
+        // Match "= Result<" but not "= anyhow::Result<" or "= core::result::Result<"
+        line.contains("= Result<") && !line.contains("::Result<")
+    });
+    check!(
+        !has_tautological,
+        "Should not show tautological 'type Result<T> = Result<T>': {}",
+        output
     );
 }

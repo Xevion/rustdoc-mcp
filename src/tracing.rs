@@ -1,7 +1,7 @@
 //! Tracing initialization.
 
 use std::sync::Once;
-use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, util::SubscriberInitExt};
+use tracing_subscriber::{fmt::format::FmtSpan, util::SubscriberInitExt, EnvFilter};
 
 static INIT: Once = Once::new();
 
@@ -28,10 +28,8 @@ pub fn init() {
 
         if is_test {
             builder.with_test_writer().finish().set_default();
-        } else {
-            if let Err(e) = builder.with_writer(std::io::stderr).try_init() {
-                eprintln!("Failed to initialize tracing: {}", e)
-            }
+        } else if let Err(e) = builder.with_writer(std::io::stderr).try_init() {
+            eprintln!("Failed to initialize tracing: {}", e)
         }
     });
 }
