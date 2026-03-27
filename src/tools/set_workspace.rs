@@ -1,7 +1,6 @@
-use crate::error::Result;
+use crate::error::{ConfigError, ToolError};
 use crate::types::CrateName;
 use crate::workspace::{CrateMetadata, CrateOrigin, WorkspaceContext, find_workspace_root};
-use anyhow::anyhow;
 use cargo_metadata::{DependencyKind, Metadata, MetadataCommand};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -17,13 +16,11 @@ use std::path::{Path, PathBuf};
 pub(crate) async fn handle_set_workspace(
     path: String,
     current_workspace: Option<&Path>,
-) -> Result<(PathBuf, WorkspaceContext, bool)> {
-    // Validate input - check for empty or whitespace-only paths
+) -> Result<(PathBuf, WorkspaceContext, bool), ToolError> {
+    // Validate input
     if path.trim().is_empty() {
         tracing::warn!("Empty path provided to set_workspace");
-        return Err(anyhow!(
-            "Path cannot be empty. Please provide a path to your Rust project directory."
-        ));
+        return Err(ConfigError::NoWorkspace.into());
     }
 
     // Expand tilde and convert to PathBuf
@@ -33,68 +30,60 @@ pub(crate) async fn handle_set_workspace(
     // Canonicalize the path
     let canonical_path = tokio::fs::canonicalize(&path_buf).await.map_err(|e| {
         tracing::warn!(path = %path, error = ?e, "Failed to resolve workspace path");
-        anyhow!(
-            "Failed to resolve path '{}': {}. Please check the path exists and is accessible.",
-            path,
-            e
-        )
+        ToolError::Config(ConfigError::PathNotFound {
+            path: path_buf.clone(),
+        })
     })?;
 
     // Smart file handling - detect and handle Rust-associated files
-    let metadata = tokio::fs::metadata(&canonical_path).await.map_err(|e| {
-        anyhow!(
-            "Failed to access path '{}': {}",
-            canonical_path.display(),
-            e
-        )
+    let metadata = tokio::fs::metadata(&canonical_path).await.map_err(|_| {
+        ToolError::Config(ConfigError::PathNotFound {
+            path: canonical_path.clone(),
+        })
     })?;
 
     let resolved_dir = if metadata.is_file() {
         let filename = canonical_path
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
 
-        match filename {
-            "Cargo.toml" | "Cargo.lock" => {
-                // Valid Rust project files - use parent directory
-                canonical_path
-                    .parent()
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Cannot use file at filesystem root: {}",
-                            canonical_path.display()
-                        )
-                    })?
-                    .to_path_buf()
-            }
+        match filename.as_str() {
+            "Cargo.toml" | "Cargo.lock" => canonical_path
+                .parent()
+                .ok_or_else(|| {
+                    ToolError::Config(ConfigError::InvalidFileType {
+                        path: canonical_path.clone(),
+                        file_type: "file at filesystem root".to_string(),
+                    })
+                })?
+                .to_path_buf(),
             name if name.ends_with(".rs") => {
-                return Err(anyhow!(
-                    "Source files cannot be used as workspace paths. \
-                     Please provide the project directory (containing Cargo.toml)."
-                ));
+                return Err(ConfigError::InvalidFileType {
+                    path: canonical_path,
+                    file_type: "Rust source file".to_string(),
+                }
+                .into());
             }
             _ => {
-                return Err(anyhow!(
-                    "File `{}` is not a Rust project file. \
-                     Please provide a directory path or a Cargo.toml/Cargo.lock file.",
-                    filename
-                ));
+                return Err(ConfigError::InvalidFileType {
+                    path: canonical_path,
+                    file_type: filename,
+                }
+                .into());
             }
         }
     } else {
         canonical_path
     };
 
-    // Find the workspace root (handles member crates automatically)
-    // This walks upward to find a Cargo.toml with [workspace] section
+    // Find the workspace root
     let workspace_root = find_workspace_root(&resolved_dir).ok_or_else(|| {
         tracing::warn!(path = %resolved_dir.display(), "No Rust workspace found");
-        anyhow!(
-            "No valid Rust workspace found at or above: `{}`. \
-             Please ensure the directory contains a Cargo.toml file.",
-            resolved_dir.display()
-        )
+        ToolError::Config(ConfigError::NoCargoToml {
+            path: resolved_dir.clone(),
+        })
     })?;
 
     tracing::debug!(
@@ -115,10 +104,10 @@ pub(crate) async fn handle_set_workspace(
     // Locate the Cargo.toml in the workspace root
     let cargo_toml = workspace_root.join("Cargo.toml");
     if !tokio::fs::try_exists(&cargo_toml).await.unwrap_or(false) {
-        return Err(anyhow!(
-            "Internal error: find_workspace_root returned a path without Cargo.toml: `{}`",
-            workspace_root.display()
-        ));
+        return Err(ConfigError::NoCargoToml {
+            path: workspace_root,
+        }
+        .into());
     }
 
     // Use cargo_metadata to discover workspace (CPU-bound, use spawn_blocking)
@@ -127,10 +116,14 @@ pub(crate) async fn handle_set_workspace(
         MetadataCommand::new()
             .manifest_path(&cargo_toml_clone)
             .exec()
-            .map_err(|e| anyhow!("Failed to get cargo metadata: `{}`", e))
+            .map_err(|e| {
+                ToolError::Config(ConfigError::CargoMetadata {
+                    reason: e.to_string(),
+                })
+            })
     })
     .await
-    .map_err(|e| anyhow!("Task panicked: `{}`", e))??;
+    .map_err(|e| ToolError::internal(format!("Task panicked: {e}")))??;
 
     // Extract workspace members using typed API
     let members: Vec<CrateName> = metadata
@@ -194,7 +187,7 @@ pub(crate) fn format_response(
         .count();
 
     if dep_count > 0 {
-        response.push_str(&format!("Dependencies ({}):\n", dep_count));
+        response.push_str(&format!("Dependencies ({dep_count}):\n"));
 
         // Collect and sort dependency names
         let mut dep_names: Vec<_> = metadata
@@ -207,7 +200,7 @@ pub(crate) fn format_response(
 
         for (name, info) in dep_names.iter().take(10) {
             let version = info.version.as_deref().unwrap_or("unknown");
-            response.push_str(&format!("  - {} v{}\n", name, version));
+            response.push_str(&format!("  - {name} v{version}\n"));
         }
         if dep_count > 10 {
             response.push_str(&format!("  ... and {} more\n", dep_count - 10));

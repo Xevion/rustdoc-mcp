@@ -69,7 +69,7 @@ impl ItemServer {
         let (canonical_path, workspace_info, changed) =
             handle_set_workspace(path, old_workspace.as_deref())
                 .await
-                .map_err(|e| format!("Failed to set workspace: {}", e))?;
+                .map_err(|e| e.user_message())?;
 
         // Update state
         let cargo_lock = canonical_path.join("Cargo.lock");
