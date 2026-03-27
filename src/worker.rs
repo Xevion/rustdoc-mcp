@@ -2,7 +2,7 @@
 //!
 //! The worker runs in a loop, detecting workspace changes and pre-generating
 //! documentation for crates. Tool handlers can await in-flight generation
-//! via shared futures.
+//! via shared futures. Supports graceful shutdown via `CancellationToken`.
 
 use crate::search::CrateIndex;
 use crate::stdlib::StdlibDocs;
@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::{Duration, Instant, interval_at};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 /// Maximum number of parsed CrateIndex entries to keep in memory.
 const LRU_CACHE_SIZE: usize = 50;
@@ -26,8 +28,65 @@ const LRU_CACHE_SIZE: usize = 50;
 /// Interval between workspace detection cycles.
 const DETECTION_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Timeout for graceful shutdown before forcefully terminating.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Type alias for shared doc generation futures.
 type SharedDocFuture = Shared<BoxFuture<'static, Result<Arc<CrateIndex>, String>>>;
+
+/// Cancellation-aware helpers for background tasks.
+///
+/// Wraps a `CancellationToken` and `TaskTracker` to provide structured
+/// concurrency with cancellation-aware tick and sleep operations.
+#[derive(Clone)]
+pub struct ServiceContext {
+    token: CancellationToken,
+    tracker: TaskTracker,
+}
+
+impl ServiceContext {
+    /// Create a new service context.
+    pub fn new() -> Self {
+        Self {
+            token: CancellationToken::new(),
+            tracker: TaskTracker::new(),
+        }
+    }
+
+    /// Get the cancellation token.
+    pub fn token(&self) -> &CancellationToken {
+        &self.token
+    }
+
+    /// Wait for the next interval tick, returning `false` if cancelled.
+    pub async fn tick(&self, interval: &mut tokio::time::Interval) -> bool {
+        tokio::select! {
+            _ = interval.tick() => true,
+            () = self.token.cancelled() => false,
+        }
+    }
+
+    /// Initiate graceful shutdown: cancel all tasks and wait for completion.
+    pub async fn shutdown(self) -> bool {
+        self.token.cancel();
+        self.tracker.close();
+        tokio::select! {
+            () = self.tracker.wait() => {
+                tracing::info!("All background tasks completed");
+                true
+            }
+            () = tokio::time::sleep(SHUTDOWN_TIMEOUT) => {
+                tracing::warn!("Shutdown timed out after {}s", SHUTDOWN_TIMEOUT.as_secs());
+                false
+            }
+        }
+    }
+
+    /// Check if shutdown has been requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.token.is_cancelled()
+    }
+}
 
 /// Shared state for documentation caching and generation.
 ///
@@ -132,8 +191,6 @@ impl DocState {
     pub async fn get_docs(&self, crate_name: &str) -> Result<Arc<CrateIndex>, String> {
         // Normalize the name so hyphenated lookups (e.g. "rust-stemmers") correctly
         // match entries stored under the normalized key ("rust_stemmers").
-        // CrateName::Borrow<str> returns the normalized form, so HashMap hashing is
-        // based on the normalized string — we must use the same form for lookups.
         let key = CrateName::new_unchecked(crate_name);
 
         // 1. Check cache first
@@ -220,16 +277,14 @@ impl DocState {
         // Await the result
         let result = shared_future.await;
 
-        // Remove from in_flight. Must use the normalized CrateName key — removing with
-        // a raw &str containing hyphens (e.g. "rust-stemmers") would hash differently
-        // from the normalized key ("rust_stemmers") and silently miss.
+        // Remove from in_flight
         {
             let mut in_flight = self.in_flight.lock().await;
             if in_flight.remove(&key).is_none() {
                 tracing::warn!(
                     crate_name,
                     normalized = key.normalized(),
-                    "in_flight entry was missing during removal — possible concurrent generation"
+                    "in_flight entry was missing during removal"
                 );
             }
         }
@@ -247,17 +302,12 @@ impl DocState {
     }
 
     /// Check if docs are cached for a crate.
-    ///
-    /// Uses the normalized crate name for the lookup so that hyphenated names
-    /// (e.g. "rust-stemmers") correctly hit entries stored under "rust_stemmers".
     pub async fn is_cached(&self, crate_name: &str) -> bool {
         let key = CrateName::new_unchecked(crate_name);
         self.cache.read().await.contains(&key)
     }
 
     /// Check if generation is in progress for a crate.
-    ///
-    /// Uses the normalized crate name so hyphenated lookups match correctly.
     pub async fn is_generating(&self, crate_name: &str) -> bool {
         let key = CrateName::new_unchecked(crate_name);
         self.in_flight.lock().await.contains_key(&key)
@@ -276,38 +326,36 @@ impl DocState {
 }
 
 /// Background worker that continuously detects workspaces and pre-generates docs.
-pub struct BackgroundWorker {
+struct BackgroundWorker {
     state: Arc<DocState>,
+    ctx: ServiceContext,
 }
 
 impl BackgroundWorker {
-    /// Create a new background worker.
-    pub fn new(state: Arc<DocState>) -> Self {
-        Self { state }
+    fn new(state: Arc<DocState>, ctx: ServiceContext) -> Self {
+        Self { state, ctx }
     }
 
-    /// Run the background worker loop.
-    ///
-    /// This runs indefinitely, performing:
-    /// 1. Workspace detection (every 5 seconds)
-    /// 2. Documentation pre-generation for discovered crates
-    pub async fn run(&self) {
-        // Run detection immediately on start, before the periodic loop begins.
+    /// Run the background worker loop until cancelled.
+    async fn run(&self) {
+        // Run detection immediately on start
         self.detect_and_generate().await;
 
-        // Use interval_at so the first tick fires DETECTION_INTERVAL after now,
-        // not immediately. tokio::interval() fires its first tick at T=0, which
-        // would cause a redundant detection right after the initial call above.
         let mut ticker = interval_at(Instant::now() + DETECTION_INTERVAL, DETECTION_INTERVAL);
 
-        loop {
-            ticker.tick().await;
+        while self.ctx.tick(&mut ticker).await {
             self.detect_and_generate().await;
         }
+
+        tracing::info!("Background worker shutting down");
     }
 
     /// Perform one cycle of workspace detection and doc generation.
     async fn detect_and_generate(&self) {
+        if self.ctx.is_cancelled() {
+            return;
+        }
+
         // 1. Detect workspace
         let Some(workspace_path) = auto_detect_workspace().await else {
             tracing::trace!("No workspace detected");
@@ -322,7 +370,6 @@ impl BackgroundWorker {
             .unwrap_or(true);
 
         if !workspace_changed {
-            // Workspace unchanged — only generate docs for crates not yet cached
             tracing::debug!(workspace = %workspace_path.display(), "Workspace unchanged, scanning for uncached crates");
             if let Some(workspace) = current_workspace {
                 self.generate_uncached_docs(&workspace).await;
@@ -335,7 +382,6 @@ impl BackgroundWorker {
 
         match handle_set_workspace(workspace_path.display().to_string(), None).await {
             Ok((canonical_path, workspace_info, _changed)) => {
-                // Update state
                 let cargo_lock = canonical_path.join("Cargo.lock");
                 let cargo_lock = if cargo_lock.exists() {
                     Some(cargo_lock)
@@ -343,7 +389,6 @@ impl BackgroundWorker {
                     None
                 };
 
-                // Clear old cache when workspace changes
                 self.state.clear_cache().await;
 
                 self.state
@@ -357,7 +402,6 @@ impl BackgroundWorker {
                     "Background worker configured workspace"
                 );
 
-                // 4. Start generating docs
                 self.generate_uncached_docs(&workspace_info).await;
             }
             Err(e) => {
@@ -371,7 +415,6 @@ impl BackgroundWorker {
         let prioritized = workspace.prioritized_crates();
         let total = prioritized.len();
 
-        // Pre-scan to build a summary for the log line before doing any work.
         let mut already_cached: u32 = 0;
         let mut already_generating: u32 = 0;
         let mut to_generate: Vec<CrateName> = Vec::new();
@@ -398,7 +441,12 @@ impl BackgroundWorker {
         );
 
         for crate_name in to_generate {
-            // Generate docs (this will cache on success)
+            // Check cancellation between crate generations
+            if self.ctx.is_cancelled() {
+                tracing::debug!("Stopping doc generation due to shutdown");
+                return;
+            }
+
             match self.state.get_docs(crate_name.as_str()).await {
                 Ok(_) => {
                     tracing::info!(crate_name = %crate_name, "Background documentation ready");
@@ -408,54 +456,70 @@ impl BackgroundWorker {
                 }
             }
 
-            // Yield to allow other tasks to run
             tokio::task::yield_now().await;
         }
     }
 }
 
-/// Spawn the background worker as a tokio task.
+/// Spawn the background worker as a tracked task.
 ///
-/// Returns a handle to the spawned task.
-pub fn spawn_background_worker(state: Arc<DocState>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let worker = BackgroundWorker::new(state);
+/// Returns the `ServiceContext` which can be used to trigger graceful shutdown.
+pub fn spawn_background_worker(state: Arc<DocState>) -> ServiceContext {
+    let ctx = ServiceContext::new();
+    let worker = BackgroundWorker::new(state, ctx.clone());
 
-        // Run with panic recovery
-        loop {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // We need to create a new runtime context here for the panic boundary
-            }));
+    ctx.tracker.spawn(async move {
+        worker.run().await;
+    });
 
-            if result.is_err() {
-                tracing::error!("Background worker panicked, restarting in 5 seconds");
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-
-            worker.run().await;
-        }
-    })
+    ctx
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert2::check;
 
     #[tokio::test]
     async fn test_doc_state_new() {
         let state = DocState::new(None);
-        assert!(!state.has_workspace().await);
-        assert!(state.workspace().await.is_none());
-        assert!(state.working_directory().await.is_none());
+        check!(!state.has_workspace().await);
+        check!(state.workspace().await.is_none());
+        check!(state.working_directory().await.is_none());
     }
 
     #[tokio::test]
     async fn test_cache_operations() {
         let state = DocState::new(None);
+        check!(!state.is_cached("test_crate").await);
+        check!(state.get_cached("test_crate").await.is_none());
+    }
 
-        // Should not be cached initially
-        assert!(!state.is_cached("test_crate").await);
-        assert!(state.get_cached("test_crate").await.is_none());
+    #[tokio::test]
+    async fn test_service_context_cancellation() {
+        let ctx = ServiceContext::new();
+        check!(!ctx.is_cancelled());
+
+        ctx.token().cancel();
+        check!(ctx.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_service_context_tick_cancelled() {
+        let ctx = ServiceContext::new();
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        interval.tick().await; // consume first immediate tick
+
+        // Cancel before tick
+        ctx.token().cancel();
+        let result = ctx.tick(&mut interval).await;
+        check!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_completes() {
+        let ctx = ServiceContext::new();
+        let completed = ctx.shutdown().await;
+        check!(completed);
     }
 }

@@ -19,5 +19,5 @@ pub use error::{
 pub use format::{DetailLevel, TypeFormatter};
 pub use search::{ItemKind, QueryContext};
 pub use types::CrateName;
-pub use worker::DocState;
+pub use worker::{DocState, ServiceContext};
 pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};
