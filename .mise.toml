@@ -1,0 +1,8 @@
+[tools]
+bun = "1.3"
+"cargo:cargo-nextest" = "latest"
+"cargo:cargo-machete" = "latest"
+"cargo:cargo-deny" = "latest"
+
+[env]
+RUSTUP_TOOLCHAIN = "nightly"
