@@ -196,21 +196,23 @@ mod tests {
 
     #[test]
     fn test_is_stdlib_crate() {
-        assert!(StdlibDocs::is_stdlib_crate("std"));
-        assert!(StdlibDocs::is_stdlib_crate("core"));
-        assert!(StdlibDocs::is_stdlib_crate("alloc"));
-        assert!(!StdlibDocs::is_stdlib_crate("serde"));
-        assert!(!StdlibDocs::is_stdlib_crate("tokio"));
+        use assert2::check;
+        check!(StdlibDocs::is_stdlib_crate("std"));
+        check!(StdlibDocs::is_stdlib_crate("core"));
+        check!(StdlibDocs::is_stdlib_crate("alloc"));
+        check!(!StdlibDocs::is_stdlib_crate("serde"));
+        check!(!StdlibDocs::is_stdlib_crate("tokio"));
     }
 
     #[tokio::test]
     async fn test_discover_stdlib() {
+        use assert2::check;
         // This test requires nightly + rust-docs-json to be installed
         match StdlibDocs::discover() {
             Ok(stdlib) => {
-                assert!(stdlib.has_docs("std"));
-                assert!(stdlib.has_docs("core"));
-                assert!(stdlib.rustc_version().contains("rustc"));
+                check!(stdlib.has_docs("std"));
+                check!(stdlib.has_docs("core"));
+                check!(stdlib.rustc_version().contains("rustc"));
             }
             Err(e) => {
                 // Skip test if not available

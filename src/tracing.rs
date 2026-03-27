@@ -196,8 +196,8 @@ mod tests {
 
     #[test]
     fn test_log_format_from_env() {
-        // Default is pretty
-        assert_eq!(LogFormat::from_env(), LogFormat::Pretty);
+        use assert2::check;
+        check!(LogFormat::from_env() == LogFormat::Pretty);
     }
 
     #[test]

@@ -323,67 +323,59 @@ pub(crate) fn expand_tilde(path: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert2::check;
 
     #[test]
     fn test_is_at_system_root() {
-        // Unix root
-        assert!(is_at_system_root(Path::new("/")));
+        check!(is_at_system_root(Path::new("/")));
 
-        // Windows roots
         if cfg!(windows) {
-            assert!(is_at_system_root(Path::new("C:\\")));
-            assert!(is_at_system_root(Path::new("D:\\")));
+            check!(is_at_system_root(Path::new("C:\\")));
+            check!(is_at_system_root(Path::new("D:\\")));
         }
 
-        // Not roots
-        assert!(!is_at_system_root(Path::new("/home")));
-        assert!(!is_at_system_root(Path::new("/home/user")));
+        check!(!is_at_system_root(Path::new("/home")));
+        check!(!is_at_system_root(Path::new("/home/user")));
         if cfg!(windows) {
-            assert!(!is_at_system_root(Path::new("C:\\Users")));
+            check!(!is_at_system_root(Path::new("C:\\Users")));
         }
     }
 
     #[test]
     fn test_is_system_directory() {
-        // Unix system directories
-        assert!(is_system_directory(Path::new("/usr")));
-        assert!(is_system_directory(Path::new("/usr/local")));
-        assert!(is_system_directory(Path::new("/etc")));
-        assert!(is_system_directory(Path::new("/etc/nginx")));
-        assert!(is_system_directory(Path::new("/var")));
-        assert!(is_system_directory(Path::new("/opt")));
+        check!(is_system_directory(Path::new("/usr")));
+        check!(is_system_directory(Path::new("/usr/local")));
+        check!(is_system_directory(Path::new("/etc")));
+        check!(is_system_directory(Path::new("/etc/nginx")));
+        check!(is_system_directory(Path::new("/var")));
+        check!(is_system_directory(Path::new("/opt")));
 
-        // Windows system directories
         if cfg!(windows) {
-            assert!(is_system_directory(Path::new("C:\\Windows")));
-            assert!(is_system_directory(Path::new("C:\\Windows\\System32")));
-            assert!(is_system_directory(Path::new("C:\\Program Files")));
-            assert!(is_system_directory(Path::new("C:\\Program Files (x86)")));
+            check!(is_system_directory(Path::new("C:\\Windows")));
+            check!(is_system_directory(Path::new("C:\\Windows\\System32")));
+            check!(is_system_directory(Path::new("C:\\Program Files")));
+            check!(is_system_directory(Path::new("C:\\Program Files (x86)")));
         }
 
-        // Not system directories
-        assert!(!is_system_directory(Path::new("/home")));
-        assert!(!is_system_directory(Path::new("/home/user")));
-        assert!(!is_system_directory(Path::new("/home/user/projects")));
+        check!(!is_system_directory(Path::new("/home")));
+        check!(!is_system_directory(Path::new("/home/user")));
+        check!(!is_system_directory(Path::new("/home/user/projects")));
 
         if cfg!(windows) {
-            assert!(!is_system_directory(Path::new("C:\\Users")));
-            assert!(!is_system_directory(Path::new("C:\\Users\\user")));
+            check!(!is_system_directory(Path::new("C:\\Users")));
+            check!(!is_system_directory(Path::new("C:\\Users\\user")));
         }
     }
 
     #[test]
     fn test_is_boundary_directory() {
-        // System roots are boundaries
-        assert!(is_boundary_directory(Path::new("/")));
+        check!(is_boundary_directory(Path::new("/")));
 
-        // System directories are boundaries
-        assert!(is_boundary_directory(Path::new("/usr")));
-        assert!(is_boundary_directory(Path::new("/etc")));
+        check!(is_boundary_directory(Path::new("/usr")));
+        check!(is_boundary_directory(Path::new("/etc")));
 
-        // User directories are not boundaries
-        assert!(!is_boundary_directory(Path::new("/home")));
-        assert!(!is_boundary_directory(Path::new("/home/user")));
-        assert!(!is_boundary_directory(Path::new("/home/user/projects")));
+        check!(!is_boundary_directory(Path::new("/home")));
+        check!(!is_boundary_directory(Path::new("/home/user")));
+        check!(!is_boundary_directory(Path::new("/home/user/projects")));
     }
 }

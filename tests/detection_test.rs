@@ -1,5 +1,6 @@
 mod common;
 
+use assert2::{check, let_assert};
 use common::TempWorkspace;
 use rustdoc_mcp::workspace::{
     find_cargo_toml_with_constraints, find_git_root, find_workspace_root, has_workspace_section,
@@ -13,8 +14,8 @@ fn test_find_cargo_toml_in_current_directory() {
     workspace.create_cargo_toml("Cargo.toml", false);
 
     let result = find_cargo_toml_with_constraints(workspace.path());
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path().join("Cargo.toml"));
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path().join("Cargo.toml"));
 }
 
 #[test]
@@ -24,8 +25,8 @@ fn test_find_cargo_toml_one_directory_up() {
     workspace.create_dir("subdir");
 
     let result = find_cargo_toml_with_constraints(&workspace.path().join("subdir"));
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path().join("Cargo.toml"));
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path().join("Cargo.toml"));
 }
 
 #[test]
@@ -35,8 +36,8 @@ fn test_find_cargo_toml_two_directories_up_no_git() {
     workspace.create_dir("dir1/dir2");
 
     let result = find_cargo_toml_with_constraints(&workspace.path().join("dir1/dir2"));
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path().join("Cargo.toml"));
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path().join("Cargo.toml"));
 }
 
 #[test]
@@ -47,7 +48,7 @@ fn test_stop_after_two_directories_no_git() {
 
     // Starting from dir3, can only go up 2 dirs (to dir1), won't find Cargo.toml at root
     let result = find_cargo_toml_with_constraints(&workspace.path().join("dir1/dir2/dir3"));
-    assert!(result.is_none());
+    check!(result.is_none());
 }
 
 #[test]
@@ -59,8 +60,8 @@ fn test_unlimited_depth_in_git_repo() {
 
     // In a Git repo, can search unlimited depth
     let result = find_cargo_toml_with_constraints(&workspace.path().join("dir1/dir2/dir3/dir4"));
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path().join("Cargo.toml"));
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path().join("Cargo.toml"));
 }
 
 #[test]
@@ -75,9 +76,8 @@ fn test_stop_at_git_repository_root() {
 
     // Should find repo/Cargo.toml, not parent/Cargo.toml
     let result = find_cargo_toml_with_constraints(&workspace.path().join("parent/repo/subdir"));
-    assert!(result.is_some());
-    let found = result.unwrap();
-    assert_eq!(found, workspace.path().join("parent/repo/Cargo.toml"));
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path().join("parent/repo/Cargo.toml"));
 }
 
 #[test]
@@ -93,9 +93,8 @@ fn test_git_submodule_boundary() {
 
     // Should find submodule/Cargo.toml, not exit to parent
     let result = find_cargo_toml_with_constraints(&workspace.path().join("parent/submodule/deep"));
-    assert!(result.is_some());
-    let found = result.unwrap();
-    assert_eq!(found, workspace.path().join("parent/submodule/Cargo.toml"));
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path().join("parent/submodule/Cargo.toml"));
 }
 
 #[test]
@@ -105,8 +104,8 @@ fn test_find_git_root_in_repo() {
     workspace.create_dir("deep/nested/path");
 
     let result = find_git_root(&workspace.path().join("deep/nested/path"));
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path());
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path());
 }
 
 #[test]
@@ -115,7 +114,7 @@ fn test_find_git_root_not_in_repo() {
     workspace.create_dir("no/git/here");
 
     let result = find_git_root(&workspace.path().join("no/git/here"));
-    assert!(result.is_none());
+    check!(result.is_none());
 }
 
 #[test]
@@ -128,8 +127,8 @@ fn test_find_git_root_with_submodule() {
 
     // Should find submodule as the git root (innermost .git)
     let result = find_git_root(&workspace.path().join("submodule/nested"));
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path().join("submodule"));
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path().join("submodule"));
 }
 
 #[test]
@@ -138,7 +137,7 @@ fn test_has_workspace_section_workspace() {
     workspace.create_cargo_toml("Cargo.toml", true);
 
     let result = has_workspace_section(&workspace.path().join("Cargo.toml"));
-    assert_eq!(result, Some(true));
+    check!(result == Some(true));
 }
 
 #[test]
@@ -147,7 +146,7 @@ fn test_has_workspace_section_package_only() {
     workspace.create_cargo_toml("Cargo.toml", false);
 
     let result = has_workspace_section(&workspace.path().join("Cargo.toml"));
-    assert_eq!(result, Some(false));
+    check!(result == Some(false));
 }
 
 #[test]
@@ -156,7 +155,7 @@ fn test_has_workspace_section_invalid() {
     workspace.create_file("Cargo.toml", "invalid toml content {][}");
 
     let result = has_workspace_section(&workspace.path().join("Cargo.toml"));
-    assert_eq!(result, None);
+    check!(result.is_none());
 }
 
 #[test]
@@ -164,7 +163,7 @@ fn test_has_workspace_section_nonexistent() {
     let workspace = TempWorkspace::new();
 
     let result = has_workspace_section(&workspace.path().join("nonexistent.toml"));
-    assert_eq!(result, None);
+    check!(result.is_none());
 }
 
 #[test]
@@ -173,8 +172,8 @@ fn test_find_workspace_root_already_workspace() {
     workspace.create_cargo_toml("Cargo.toml", true);
 
     let result = find_workspace_root(workspace.path());
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path());
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path());
 }
 
 #[test]
@@ -185,8 +184,8 @@ fn test_find_workspace_root_from_package() {
     workspace.create_cargo_toml("member/Cargo.toml", false);
 
     let result = find_workspace_root(&workspace.path().join("member"));
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path());
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path());
 }
 
 #[test]
@@ -200,8 +199,8 @@ fn test_find_workspace_root_nested_packages() {
 
     // Should walk up past both packages to find workspace
     let result = find_workspace_root(&workspace.path().join("member1/nested"));
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path());
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path());
 }
 
 #[test]
@@ -211,57 +210,57 @@ fn test_find_workspace_root_package_without_workspace() {
 
     // No workspace found, should return the package directory itself
     let result = find_workspace_root(workspace.path());
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path());
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path());
 }
 
 #[test]
 fn test_is_system_directory_unix_system_dirs() {
     if cfg!(unix) {
-        assert!(is_system_directory(Path::new("/usr")));
-        assert!(is_system_directory(Path::new("/usr/local")));
-        assert!(is_system_directory(Path::new("/etc")));
-        assert!(is_system_directory(Path::new("/var/log")));
-        assert!(is_system_directory(Path::new("/opt")));
-        assert!(is_system_directory(Path::new("/bin")));
-        assert!(is_system_directory(Path::new("/sbin")));
-        assert!(is_system_directory(Path::new("/lib")));
-        assert!(is_system_directory(Path::new("/lib64")));
+        check!(is_system_directory(Path::new("/usr")));
+        check!(is_system_directory(Path::new("/usr/local")));
+        check!(is_system_directory(Path::new("/etc")));
+        check!(is_system_directory(Path::new("/var/log")));
+        check!(is_system_directory(Path::new("/opt")));
+        check!(is_system_directory(Path::new("/bin")));
+        check!(is_system_directory(Path::new("/sbin")));
+        check!(is_system_directory(Path::new("/lib")));
+        check!(is_system_directory(Path::new("/lib64")));
     }
 }
 
 #[test]
 fn test_is_system_directory_unix_user_dirs() {
     if cfg!(unix) {
-        assert!(!is_system_directory(Path::new("/home")));
-        assert!(!is_system_directory(Path::new("/home/user")));
-        assert!(!is_system_directory(Path::new("/home/user/projects")));
-        assert!(!is_system_directory(Path::new("/Users/user")));
+        check!(!is_system_directory(Path::new("/home")));
+        check!(!is_system_directory(Path::new("/home/user")));
+        check!(!is_system_directory(Path::new("/home/user/projects")));
+        check!(!is_system_directory(Path::new("/Users/user")));
     }
 }
 
 #[test]
 fn test_is_boundary_directory_system_root() {
     if cfg!(unix) {
-        assert!(is_boundary_directory(Path::new("/")));
+        check!(is_boundary_directory(Path::new("/")));
     }
 }
 
 #[test]
 fn test_is_boundary_directory_system_dirs() {
     if cfg!(unix) {
-        assert!(is_boundary_directory(Path::new("/usr")));
-        assert!(is_boundary_directory(Path::new("/etc")));
-        assert!(is_boundary_directory(Path::new("/var")));
+        check!(is_boundary_directory(Path::new("/usr")));
+        check!(is_boundary_directory(Path::new("/etc")));
+        check!(is_boundary_directory(Path::new("/var")));
     }
 }
 
 #[test]
 fn test_is_boundary_directory_user_dirs() {
     if cfg!(unix) {
-        assert!(!is_boundary_directory(Path::new("/home")));
-        assert!(!is_boundary_directory(Path::new("/home/user")));
-        assert!(!is_boundary_directory(Path::new("/home/user/code")));
+        check!(!is_boundary_directory(Path::new("/home")));
+        check!(!is_boundary_directory(Path::new("/home/user")));
+        check!(!is_boundary_directory(Path::new("/home/user/code")));
     }
 }
 
@@ -271,7 +270,7 @@ fn test_no_cargo_toml_found() {
     workspace.create_dir("empty/project");
 
     let result = find_cargo_toml_with_constraints(&workspace.path().join("empty/project"));
-    assert!(result.is_none());
+    check!(result.is_none());
 }
 
 #[test]
@@ -282,7 +281,7 @@ fn test_cargo_toml_with_invalid_content() {
 
     // Should still find the Cargo.toml file (validation happens later)
     let result = find_cargo_toml_with_constraints(&workspace.path().join("subdir"));
-    assert!(result.is_some());
+    check!(result.is_some());
 }
 
 #[test]
@@ -295,6 +294,6 @@ fn test_multiple_cargo_toml_finds_nearest() {
 
     // Should find nested/Cargo.toml (nearest one)
     let result = find_cargo_toml_with_constraints(&workspace.path().join("nested/deep"));
-    assert!(result.is_some());
-    assert_eq!(result.unwrap(), workspace.path().join("nested/Cargo.toml"));
+    let_assert!(Some(found) = result);
+    check!(found == workspace.path().join("nested/Cargo.toml"));
 }

@@ -97,10 +97,6 @@ pub(crate) async fn handle_set_workspace(
         .map(|current| current != workspace_root.as_path())
         .unwrap_or(true);
 
-    // If workspace hasn't changed, we could return early with cached data
-    // For now, we still regenerate to ensure fresh metadata
-    // TODO: Add caching to avoid regenerating docs when workspace unchanged
-
     // Locate the Cargo.toml in the workspace root
     let cargo_toml = workspace_root.join("Cargo.toml");
     if !tokio::fs::try_exists(&cargo_toml).await.unwrap_or(false) {
@@ -145,9 +141,6 @@ pub(crate) async fn handle_set_workspace(
 }
 
 /// Format a user-friendly response showing workspace configuration results.
-///
-/// Includes contextual messaging based on whether the workspace changed and what the
-/// previous workspace was.
 pub(crate) fn format_response(
     path: &Path,
     metadata: &WorkspaceContext,
@@ -179,7 +172,6 @@ pub(crate) fn format_response(
         response.push('\n');
     }
 
-    // Count non-workspace dependencies
     let dep_count = metadata
         .crate_info
         .values()
@@ -189,7 +181,6 @@ pub(crate) fn format_response(
     if dep_count > 0 {
         response.push_str(&format!("Dependencies ({dep_count}):\n"));
 
-        // Collect and sort dependency names
         let mut dep_names: Vec<_> = metadata
             .crate_info
             .iter()
@@ -211,9 +202,6 @@ pub(crate) fn format_response(
 }
 
 /// Generate comprehensive crate information with usage tracking.
-///
-/// Collects workspace members, dependencies, and standard library crates,
-/// tracking which workspace members use each dependency.
 fn collect_crate_metadata(
     metadata: &Metadata,
     member_names: &[CrateName],
@@ -245,7 +233,6 @@ fn collect_crate_metadata(
 
     for package in metadata.workspace_packages() {
         for dep in &package.dependencies {
-            // Skip workspace-internal dependencies (path dependencies or members)
             if dep.path.is_some() || member_names.iter().any(|m| m.matches(&dep.name)) {
                 continue;
             }
@@ -256,7 +243,6 @@ fn collect_crate_metadata(
                 .or_default()
                 .push(CrateName::new_unchecked(package.name.to_string()));
 
-            // Track if ANY workspace member uses this as a dev dep
             let current_dev = dep_dev_status.get(&dep.name).copied().unwrap_or(false);
             dep_dev_status.insert(dep.name.clone(), current_dev || is_dev);
         }
@@ -303,8 +289,6 @@ fn collect_crate_metadata(
 }
 
 /// Detect the rustc version for standard library crates.
-///
-/// Returns `None` if rustc is not available or version cannot be determined.
 fn get_rustc_version() -> Option<String> {
     let output = std::process::Command::new("rustc")
         .arg("--version")
@@ -316,7 +300,6 @@ fn get_rustc_version() -> Option<String> {
     }
 
     let version_output = String::from_utf8_lossy(&output.stdout);
-    // Parse "rustc 1.75.0 (abcdef123 2024-01-01)" -> "1.75.0"
     version_output
         .split_whitespace()
         .nth(1)
