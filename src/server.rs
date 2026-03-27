@@ -143,20 +143,17 @@ impl ItemServer {
 #[tool_handler]
 impl ServerHandler for ItemServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "rustdoc-mcp: A focused Rust documentation server with beautiful syntax formatting. \
-                 Automatically detects workspace and generates documentation on startup. \
-                 Standard library (std, core, alloc) is always available if rust-docs-json is installed. \
-                 Use set_workspace to override automatic detection if needed."
-                    .to_string(),
-            ),
-        }
+        )
+        .with_instructions(
+            "rustdoc-mcp: A focused Rust documentation server with beautiful syntax formatting. \
+             Automatically detects workspace and generates documentation on startup. \
+             Standard library (std, core, alloc) is always available if rust-docs-json is installed. \
+             Use set_workspace to override automatic detection if needed.",
+        )
     }
 }
 

@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 # Core
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process"] }
-rmcp = { version = "0.8", features = ["transport-io"] }
+rmcp = { version = "1.3", features = ["server", "transport-io", "macros"] }
 
 # Rustdoc types and metadata
 rustdoc-types = "0.56"
