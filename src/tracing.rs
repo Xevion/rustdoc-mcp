@@ -1,7 +1,7 @@
 //! Tracing initialization.
 
 use std::sync::Once;
-use tracing_subscriber::{fmt::format::FmtSpan, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan, util::SubscriberInitExt};
 
 static INIT: Once = Once::new();
 

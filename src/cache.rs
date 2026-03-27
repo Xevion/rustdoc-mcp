@@ -7,9 +7,8 @@ use crate::error::{ParseHashError, Result};
 use anyhow::Context;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::hash_map::DefaultHasher;
 use std::fmt;
-use std::hash::{Hash as StdHash, Hasher};
+use std::hash::Hash as StdHash;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -21,7 +20,7 @@ use std::str::FromStr;
 pub enum Hash {
     /// SHA-256 hash (32 bytes), typically from Cargo.lock checksums
     Sha256([u8; 32]),
-    /// 64-bit hash from DefaultHasher or AHasher
+    /// 64-bit hash (xxh3 or similar)
     U64(u64),
 }
 
@@ -211,9 +210,7 @@ async fn get_rustc_version_hash() -> Result<u64> {
 
     let version_string = String::from_utf8(output.stdout)
         .context("Failed to parse rustc version output as UTF-8")?;
-    let mut hasher = DefaultHasher::new();
-    version_string.hash(&mut hasher);
-    Ok(hasher.finish())
+    Ok(xxhash_rust::xxh3::xxh3_64(version_string.as_bytes()))
 }
 
 /// Hashes a single file's contents.
@@ -221,9 +218,7 @@ async fn hash_file(path: &Path) -> Result<u64> {
     let content = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("Failed to read file {}", path.display()))?;
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    Ok(hasher.finish())
+    Ok(xxhash_rust::xxh3::xxh3_64(content.as_bytes()))
 }
 
 /// Recursively hashes all .rs files in a directory in deterministic order.
@@ -232,7 +227,7 @@ async fn hash_directory(dir: &Path) -> Result<u64> {
     let dir = dir.to_path_buf();
 
     tokio::task::spawn_blocking(move || {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = xxhash_rust::xxh3::Xxh3::new();
 
         // Walk directory in sorted order for deterministic hashing
         let mut entries: Vec<_> = WalkBuilder::new(&dir)
@@ -242,8 +237,7 @@ async fn hash_directory(dir: &Path) -> Result<u64> {
                 e.path()
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .map(|ext| ext == "rs")
-                    .unwrap_or(false)
+                    .is_some_and(|ext| ext == "rs")
             })
             .collect();
 
@@ -254,16 +248,16 @@ async fn hash_directory(dir: &Path) -> Result<u64> {
 
             // Hash the relative path (so digest survives project moves)
             if let Ok(rel_path) = path.strip_prefix(&dir) {
-                rel_path.to_string_lossy().hash(&mut hasher);
+                hasher.update(rel_path.to_string_lossy().as_bytes());
             }
 
             // Hash the file contents
             if let Ok(content) = std::fs::read_to_string(path) {
-                content.hash(&mut hasher);
+                hasher.update(content.as_bytes());
             }
         }
 
-        Ok(hasher.finish())
+        Ok(hasher.digest())
     })
     .await
     .context("Task panicked")?

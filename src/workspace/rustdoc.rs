@@ -112,8 +112,7 @@ pub async fn generate_docs(
         // For external packages, find the source dir and run from there to avoid a
         // nightly cargo panic: the feature resolver fails with "did not find features
         // for (pkg, NormalOrDev)" when the target package is only a dev-dependency.
-        let source_dir =
-            find_registry_source_dir(crate_name, version, workspace_root).await?;
+        let source_dir = find_registry_source_dir(crate_name, version, workspace_root).await?;
         let target_dir = workspace_root.join("target");
         generate_docs_from_source(crate_name, &source_dir, &target_dir).await
     }

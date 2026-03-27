@@ -230,7 +230,9 @@ async fn inspect_crate_exports_structure(isolated_workspace: IsolatedWorkspace) 
     // At least one known public type should be visible in the Types section.
     // Types are sorted alphabetically, so early-alphabet types appear first.
     check!(
-        output.contains("BackgroundWorker") || output.contains("ChildIterator") || output.contains("ConfigError"),
+        output.contains("BackgroundWorker")
+            || output.contains("ChildIterator")
+            || output.contains("ConfigError"),
         "At least one known public type should be visible: {}",
         output
     );

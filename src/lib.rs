@@ -1,6 +1,3 @@
-#![warn(unreachable_pub)]
-#![warn(dead_code)]
-
 pub mod cache;
 pub mod error;
 pub mod format;

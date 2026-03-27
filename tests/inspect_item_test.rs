@@ -145,7 +145,12 @@ async fn inspect_enum_with_variants(isolated_workspace_with_serde: IsolatedWorks
     // Value enum should show its variants at high detail
     check!(output.contains("Value"));
     check!(output.contains("enum") || output.contains("Enum"));
-    check!(output.contains("Null") || output.contains("Bool") || output.contains("Number") || output.contains("String"));
+    check!(
+        output.contains("Null")
+            || output.contains("Bool")
+            || output.contains("Number")
+            || output.contains("String")
+    );
 }
 
 /// Test: Find a local struct by simple name.
@@ -308,13 +313,11 @@ async fn inspect_trait_shows_generics(isolated_workspace: IsolatedWorkspace) {
 async fn inspect_kind_mismatch_suggests_correct_kind(isolated_workspace: IsolatedWorkspace) {
     let request = InspectItemRequest {
         query: "QueryContext".to_string(), // exists as a Struct
-        kind: Some(ItemKind::Function),   // but asked for Function
+        kind: Some(ItemKind::Function),    // but asked for Function
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
-        Err(err) = handle_inspect_item(&isolated_workspace.state, request).await
-    );
+    let_assert!(Err(err) = handle_inspect_item(&isolated_workspace.state, request).await);
     check!(err.contains("QueryContext"), "error should name the item");
     // Should tell the user the item exists but under a different kind
     check!(
@@ -350,7 +353,9 @@ async fn inspect_bare_result_shows_disambiguation(
     // Should show multiple matches, not silently pick one
     // Disambiguation output should mention both crates
     check!(
-        output.contains("Multiple") || output.contains("multiple") || output.contains("Did you mean"),
+        output.contains("Multiple")
+            || output.contains("multiple")
+            || output.contains("Did you mean"),
         "Should indicate multiple matches exist for bare 'Result': {}",
         output
     );
