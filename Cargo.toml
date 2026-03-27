@@ -33,7 +33,7 @@ ignore = "0.4"
 
 # Tracing and error handling
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1.0"
 thiserror = "2.0.17"
 
