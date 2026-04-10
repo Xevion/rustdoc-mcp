@@ -36,12 +36,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 
-pub fn init_tracing() {
+pub(crate) fn init_tracing() {
     rustdoc_mcp::tracing::init();
 }
 
 /// Returns the project root directory (where Cargo.toml lives).
-pub fn project_root() -> PathBuf {
+pub(crate) fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
@@ -60,7 +60,7 @@ pub fn project_root() -> PathBuf {
 /// assert!(workspace.path().join("src/main.rs").exists());
 /// ```
 #[allow(dead_code)] // Methods used across different integration test crates
-pub struct TempWorkspace {
+pub(crate) struct TempWorkspace {
     _temp: TempDir,
     root: PathBuf,
 }
@@ -68,14 +68,14 @@ pub struct TempWorkspace {
 #[allow(dead_code)] // Methods used across different integration test crates
 impl TempWorkspace {
     /// Creates a new empty temporary workspace.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let temp = TempDir::new().expect("Failed to create temp directory");
         let root = temp.path().to_path_buf();
         Self { _temp: temp, root }
     }
 
     /// Returns the root path of this workspace.
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.root
     }
 
@@ -83,7 +83,7 @@ impl TempWorkspace {
     ///
     /// # Panics
     /// Panics if directory creation fails.
-    pub fn create_dir(&self, path: &str) {
+    pub(crate) fn create_dir(&self, path: &str) {
         let full_path = self.root.join(path);
         std::fs::create_dir_all(&full_path)
             .unwrap_or_else(|e| panic!("Failed to create directory '{}': {}", path, e));
@@ -95,7 +95,7 @@ impl TempWorkspace {
     ///
     /// # Panics
     /// Panics if file creation fails.
-    pub fn create_file(&self, path: &str, content: &str) {
+    pub(crate) fn create_file(&self, path: &str, content: &str) {
         let full_path = self.root.join(path);
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent).unwrap_or_else(|e| {
@@ -110,7 +110,7 @@ impl TempWorkspace {
     ///
     /// # Panics
     /// Panics if copying fails.
-    pub fn copy_file(&self, source: &Path, dest_relative: &str) {
+    pub(crate) fn copy_file(&self, source: &Path, dest_relative: &str) {
         let dest = self.root.join(dest_relative);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).unwrap_or_else(|e| {
@@ -131,7 +131,7 @@ impl TempWorkspace {
     }
 
     /// Creates a Cargo.toml file with either workspace or package configuration.
-    pub fn create_cargo_toml(&self, path: &str, is_workspace: bool) {
+    pub(crate) fn create_cargo_toml(&self, path: &str, is_workspace: bool) {
         let content = if is_workspace {
             r#"
 [workspace]
@@ -153,7 +153,7 @@ edition = "2024"
     }
 
     /// Creates a minimal .git directory structure for testing git detection.
-    pub fn create_git_repo(&self, path: &str) {
+    pub(crate) fn create_git_repo(&self, path: &str) {
         let git_path = self.root.join(path).join(".git");
         std::fs::create_dir_all(&git_path).expect("Failed to create .git directory");
         std::fs::create_dir_all(git_path.join("refs")).expect("Failed to create refs");
@@ -163,7 +163,7 @@ edition = "2024"
     }
 
     /// Creates a git submodule marker (a .git file pointing to parent).
-    pub fn create_git_submodule(&self, path: &str) {
+    pub(crate) fn create_git_submodule(&self, path: &str) {
         let git_file = self.root.join(path).join(".git");
         if let Some(parent) = git_file.parent() {
             std::fs::create_dir_all(parent).expect("Failed to create submodule directory");
@@ -186,7 +186,7 @@ impl Default for TempWorkspace {
 ///
 /// Composes [`TempWorkspace`] with MCP-specific setup (DocState).
 #[allow(dead_code)] // Fields used across different integration test crates
-pub struct IsolatedWorkspace {
+pub(crate) struct IsolatedWorkspace {
     workspace: TempWorkspace,
     pub state: Arc<DocState>,
 }
@@ -196,7 +196,7 @@ impl IsolatedWorkspace {
     /// Creates a new isolated workspace with default crates (rustdoc-mcp only).
     ///
     /// For tests that need external dependencies, use `with_deps()` instead.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_deps(&["rustdoc-mcp"])
     }
 
@@ -207,7 +207,7 @@ impl IsolatedWorkspace {
     ///
     /// # Arguments
     /// * `crates` - List of crate names to include (e.g., `["rustdoc-mcp", "serde"]`)
-    pub fn with_deps(crates: &[&str]) -> Self {
+    pub(crate) fn with_deps(crates: &[&str]) -> Self {
         init_tracing();
         let workspace = TempWorkspace::new();
         let project = project_root();
@@ -303,7 +303,7 @@ impl IsolatedWorkspace {
     }
 
     /// Returns the root path of this workspace.
-    pub fn root(&self) -> &Path {
+    pub(crate) fn root(&self) -> &Path {
         self.workspace.path()
     }
 }
@@ -327,7 +327,7 @@ impl Default for IsolatedWorkspace {
 /// the temp directory must stay alive for the duration of the test. Use `.state`
 /// to get the DocState for tool handlers.
 #[fixture]
-pub fn isolated_workspace() -> IsolatedWorkspace {
+pub(crate) fn isolated_workspace() -> IsolatedWorkspace {
     IsolatedWorkspace::new()
 }
 
@@ -336,7 +336,7 @@ pub fn isolated_workspace() -> IsolatedWorkspace {
 /// Same as `isolated_workspace` but also includes serde and serde_json crates.
 /// Also includes serde_core for cross-crate re-export resolution.
 #[fixture]
-pub fn isolated_workspace_with_serde() -> IsolatedWorkspace {
+pub(crate) fn isolated_workspace_with_serde() -> IsolatedWorkspace {
     IsolatedWorkspace::with_deps(&["rustdoc-mcp", "serde", "serde_json", "serde_core"])
 }
 
@@ -345,7 +345,7 @@ pub fn isolated_workspace_with_serde() -> IsolatedWorkspace {
 /// Same as `isolated_workspace` but also includes the anyhow crate.
 /// Used for testing external dependency search and type alias resolution.
 #[fixture]
-pub fn isolated_workspace_with_anyhow() -> IsolatedWorkspace {
+pub(crate) fn isolated_workspace_with_anyhow() -> IsolatedWorkspace {
     IsolatedWorkspace::with_deps(&["rustdoc-mcp", "anyhow"])
 }
 
@@ -359,7 +359,7 @@ pub fn isolated_workspace_with_anyhow() -> IsolatedWorkspace {
 ///
 /// Prefer `isolated_workspace` unless you specifically need to test shared-state behavior.
 #[fixture]
-pub fn shared_state() -> Arc<DocState> {
+pub(crate) fn shared_state() -> Arc<DocState> {
     init_tracing();
     let project_root = project_root();
 
@@ -457,7 +457,7 @@ pub fn shared_state() -> Arc<DocState> {
 /// }
 /// ```
 #[allow(dead_code)] // Used in search_test.rs
-pub async fn warm_cache(state: &Arc<DocState>, crates: &[&str]) {
+pub(crate) async fn warm_cache(state: &Arc<DocState>, crates: &[&str]) {
     for crate_name in crates {
         // Trigger a search to force index build
         // Using a minimal query that will still trigger indexing

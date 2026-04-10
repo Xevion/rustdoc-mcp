@@ -17,7 +17,7 @@ pub use error::{
     ValidationError,
 };
 pub use format::{DetailLevel, TypeFormatter};
-pub use search::{ItemKind, QueryContext};
+pub use search::{ItemKind, QueryContext, index_metrics};
 pub use types::CrateName;
 pub use worker::{DocState, ServiceContext};
 pub use workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};

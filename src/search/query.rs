@@ -14,10 +14,40 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
-    path::Path,
+    path::{Path, PathBuf},
     ptr::NonNull,
     sync::Arc,
 };
+
+/// A pre-loaded crate index injected into a [`QueryContext`] before any lookups.
+///
+/// Used for cases where the source rustdoc JSON lives outside the workspace
+/// `target/doc/` directory (e.g., stdlib docs in the nightly sysroot). The
+/// context short-circuits its normal lookup for any crate registered here.
+#[derive(Clone)]
+pub struct PreloadedCrate {
+    /// Already-loaded crate index. The `Arc` keeps the data alive for the
+    /// entire `QueryContext` lifetime.
+    pub index: Arc<CrateIndex>,
+    /// Absolute path to the source rustdoc JSON file. Used for mtime-based
+    /// cache invalidation in [`crate::search::TermIndex`].
+    pub source_path: PathBuf,
+    /// Absolute path where the compiled search index should be stored.
+    /// Distinct from `source_path` so the cache can live in a user-writable
+    /// directory even when the source lives in a read-only toolchain install.
+    pub index_cache_path: PathBuf,
+}
+
+impl Debug for PreloadedCrate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Intentionally omit `index` — CrateIndex holds tens of MBs of
+        // rustdoc data and has no Debug impl (nor should it).
+        f.debug_struct("PreloadedCrate")
+            .field("source_path", &self.source_path)
+            .field("index_cache_path", &self.index_cache_path)
+            .finish_non_exhaustive()
+    }
+}
 
 /// Represents a parsed item path like `std::vec::Vec` or `MyStruct`
 #[derive(Debug, Clone)]
@@ -138,6 +168,13 @@ pub struct QueryContext {
     /// Negative cache: crate names for which doc generation already failed this session.
     /// Prevents retrying expensive cargo rustdoc invocations for the same crate.
     failed_crates: RefCell<std::collections::HashSet<String>>,
+    /// Pre-loaded crate indices registered at construction time (e.g., stdlib).
+    ///
+    /// Plain `HashMap` (not `RefCell`) because preloading is a construction-time
+    /// decision — we never mutate it after `QueryContext` is built. This lets
+    /// [`Self::load_crate`] return `&CrateIndex` bound to `&self` via a plain
+    /// `Arc::deref`, with no `unsafe` required.
+    preloaded: HashMap<CrateName, PreloadedCrate>,
 }
 
 impl Debug for QueryContext {
@@ -146,19 +183,73 @@ impl Debug for QueryContext {
             .field("workspace", &self.workspace.root)
             .field("doc_cache_len", &self.doc_cache.borrow().len())
             .field("failed_crates_len", &self.failed_crates.borrow().len())
+            .field("preloaded_len", &self.preloaded.len())
             .finish()
     }
 }
 
 impl QueryContext {
-    /// Create a new query context for the given workspace.
+    /// Create a new query context for the given workspace with no preloaded crates.
     pub fn new(workspace: Arc<WorkspaceContext>) -> Self {
+        Self::with_preloaded(workspace, HashMap::new())
+    }
+
+    /// Create a new query context with a set of pre-loaded crate indices.
+    ///
+    /// Use this when some crates should bypass the workspace `target/doc/`
+    /// lookup — most notably stdlib crates, whose rustdoc JSON lives in the
+    /// nightly sysroot and whose search index must be cached in a
+    /// user-writable directory rather than alongside the source JSON.
+    ///
+    /// # Invariant
+    ///
+    /// Keys in `preloaded` **must** already be in normalized form (use
+    /// underscores, not hyphens). Lookup sites resolve by `&str`, and
+    /// [`CrateName`]'s `Borrow<str>` impl exposes the normalized form, so a
+    /// key inserted as `"serde-json"` would be unreachable by any `&str`
+    /// lookup. A debug assertion enforces this at construction.
+    pub fn with_preloaded(
+        workspace: Arc<WorkspaceContext>,
+        preloaded: HashMap<CrateName, PreloadedCrate>,
+    ) -> Self {
+        debug_assert!(
+            preloaded
+                .keys()
+                .all(|k| k.as_str() == k.normalized() || !k.as_str().contains('-')),
+            "preloaded crate keys must be normalized (no hyphens in original form); \
+             a hyphenated key would be unreachable via &str lookup"
+        );
         Self {
             workspace,
             arena: Bump::new(),
             doc_cache: RefCell::new(HashMap::new()),
             failed_crates: RefCell::new(std::collections::HashSet::new()),
+            preloaded,
         }
+    }
+
+    /// Resolve the source rustdoc JSON path for a crate, respecting preloaded entries.
+    ///
+    /// For preloaded crates (e.g., stdlib), returns the path stored in the
+    /// [`PreloadedCrate`] — typically a sysroot path. For all other crates,
+    /// returns the standard `<workspace>/target/doc/<crate>.json` location.
+    pub fn doc_source_path(&self, crate_name: &str) -> PathBuf {
+        if let Some(pre) = self.preloaded.get(crate_name) {
+            return pre.source_path.clone();
+        }
+        CrateName::new_unchecked(crate_name).doc_json_path(&self.workspace.root.join("target/doc"))
+    }
+
+    /// Resolve the compiled search-index cache path for a crate, respecting preloaded entries.
+    ///
+    /// For preloaded crates, returns the explicit cache path — typically under
+    /// a user-writable directory like `$XDG_CACHE_HOME/rustdoc-mcp/...`. For
+    /// workspace crates, the cache sits alongside the source JSON in `target/doc/`.
+    pub fn index_cache_path(&self, crate_name: &str) -> PathBuf {
+        if let Some(pre) = self.preloaded.get(crate_name) {
+            return pre.index_cache_path.clone();
+        }
+        CrateName::new_unchecked(crate_name).index_path(&self.workspace.root.join("target/doc"))
     }
 
     /// Returns true if documentation generation for this crate failed earlier in this
@@ -178,6 +269,14 @@ impl QueryContext {
     /// supports doc generation (has Cargo.toml, source files, etc.), generates docs.
     /// Returns a reference bound to the lifetime of this QueryContext.
     pub fn load_crate(&self, crate_name: &str) -> Result<&CrateIndex, LoadError> {
+        // Preloaded crates (e.g., stdlib) bypass the workspace target/doc/ lookup.
+        // The Arc keeps the CrateIndex alive for the entire QueryContext lifetime,
+        // and `self.preloaded` is never mutated after construction, so the returned
+        // reference is valid for `&self`.
+        if let Some(pre) = self.preloaded.get(crate_name) {
+            return Ok(pre.index.as_ref());
+        }
+
         // Check cache first and return reference with proper lifetime
         if let Some(cached_ptr) = self.doc_cache.borrow().get(crate_name) {
             // SAFETY: The ArenaPtr is valid for the lifetime of self (arena allocation).
@@ -185,9 +284,15 @@ impl QueryContext {
             return Ok(unsafe { cached_ptr.as_ref() });
         }
 
+        // Note: stdlib handlers construct a sentinel workspace root at "/".
+        // Cross-crate references between stdlib crates (e.g. `std` referencing
+        // items from `core` or `alloc_crate`) legitimately fall through to
+        // this cold path and return `NotFound`. That's fine — those lookups
+        // are opportunistic and callers handle the failure.
+
         // Try to find and load the JSON doc file
+        let doc_path = self.doc_source_path(crate_name);
         let crate_name_typed = CrateName::new_unchecked(crate_name);
-        let doc_path = crate_name_typed.doc_json_path(&self.workspace.root.join("target/doc"));
 
         // If documentation doesn't exist, check if we can generate it
         if !doc_path.exists() {
@@ -363,9 +468,10 @@ impl QueryContext {
             Err(e) => return Err(e),
         }
 
-        // Discovery: Check if a JSON file exists even though crate isn't in workspace
-        let doc_path = CrateName::new_unchecked(crate_name)
-            .doc_json_path(&self.workspace.root.join("target/doc"));
+        // Discovery: Check if a JSON file exists even though crate isn't in workspace.
+        // Route through doc_source_path so any future path-resolution changes
+        // (including preloaded crates) are honored consistently.
+        let doc_path = self.doc_source_path(crate_name);
 
         if doc_path.exists() {
             tracing::debug!(

@@ -10,6 +10,43 @@ use std::{collections::HashMap, path::Path, time::SystemTime};
 use super::tokenize::{TermBuilder, hash_term, tokenize_and_stem};
 use rust_stemmers::{Algorithm, Stemmer};
 
+/// Process-wide counters for observing [`TermIndex`] cache behavior.
+///
+/// These atomics are incremented whenever the search index is loaded from
+/// disk or rebuilt from scratch. Tests can read deltas (snapshot before,
+/// snapshot after) to verify cache-reuse behavior without depending on
+/// wall-clock timing or log parsing.
+///
+/// # Concurrency
+///
+/// The counters are process-global, so parallel tests will share them. Tests
+/// should always compare deltas rather than absolute values, and assert
+/// only that the expected operation occurred at least once — never that it
+/// occurred *exactly* N times.
+pub mod metrics {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static INDEX_BUILDS: AtomicUsize = AtomicUsize::new(0);
+    static INDEX_LOADS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Snapshot of `(builds, loads)` counters at a point in time.
+    #[must_use]
+    pub fn snapshot() -> (usize, usize) {
+        (
+            INDEX_BUILDS.load(Ordering::Relaxed),
+            INDEX_LOADS.load(Ordering::Relaxed),
+        )
+    }
+
+    pub(super) fn record_build() {
+        INDEX_BUILDS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn record_load() {
+        INDEX_LOADS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Term hash for fast lookup
 type TermHash = u64;
 
@@ -158,10 +195,11 @@ impl TermIndex {
         let crate_index = item.crate_index();
         let crate_name = CrateName::new_unchecked(crate_index.name());
 
-        // Get paths for docs and index
-        let target_doc = request.workspace_root().join("target/doc");
-        let doc_path = crate_name.doc_json_path(&target_doc);
-        let index_path = crate_name.index_path(&target_doc);
+        // Get paths for docs and index. Preloaded crates (e.g., stdlib) supply
+        // their own source and cache paths via QueryContext, so the source can
+        // live in a read-only sysroot while the cache goes to a writable dir.
+        let doc_path = request.doc_source_path(crate_name.as_str());
+        let index_path = request.index_cache_path(crate_name.as_str());
 
         // Build index synchronously
         let start = std::time::Instant::now();
@@ -187,6 +225,7 @@ impl TermIndex {
 
         // Try loading cached index
         if let Some(terms) = Self::load(&index_path, mtime).await {
+            metrics::record_load();
             tracing::debug!(
                 crate_name = %crate_name,
                 terms = terms.terms.len(),
@@ -196,7 +235,8 @@ impl TermIndex {
             return Self { crate_name, terms };
         }
 
-        // Use the pre-built index
+        // Cache miss — use the freshly built index and persist it.
+        metrics::record_build();
         Self::store(&prepared_terms, &index_path).await;
         Self {
             terms: prepared_terms,
@@ -279,6 +319,20 @@ impl TermIndex {
 
         // Serialize in spawn_blocking since it's CPU intensive
         tokio::task::spawn_blocking(move || {
+            // Ensure the parent directory exists. This matters for preloaded
+            // crates (e.g., stdlib) whose cache lives under a per-version
+            // subdirectory that may not have been created yet.
+            if let Some(parent) = path.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = ?e,
+                    "Failed to create parent directory for index cache"
+                );
+                return;
+            }
+
             match std::fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)

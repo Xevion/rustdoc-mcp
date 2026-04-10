@@ -1,3 +1,15 @@
+//! Item inspection tool handler.
+//!
+//! # Structured and rendered APIs
+//!
+//! Follows the same two-layer pattern as [`crate::tools::search`]:
+//!
+//! - [`handle_inspect_item_structured`] returns a typed [`StructuredInspectResult`]
+//!   with the resolved item's full path, kind, crate, and the rendered content
+//!   (or a disambiguation list when multiple items match).
+//! - [`handle_inspect_item`] wraps the structured variant and produces the
+//!   human-readable MCP output.
+
 use crate::format::DetailLevel;
 use crate::format::renderers::*;
 use crate::item::ItemRef;
@@ -32,13 +44,58 @@ fn default_detail_level() -> DetailLevel {
     DetailLevel::Medium
 }
 
+/// Structured outcome of an `inspect_item` call.
+///
+/// Tests should match on this enum to assert on concrete fields (full path,
+/// kind, candidate list) rather than substring-matching the rendered output.
+#[derive(Debug, Clone)]
+pub enum StructuredInspectResult {
+    /// A single item was resolved. `rendered` contains the formatted output
+    /// (signature + docs + detail per the requested `detail_level`).
+    Item {
+        full_path: String,
+        kind: String,
+        crate_name: String,
+        rendered: String,
+    },
+    /// Multiple items matched; caller must disambiguate.
+    Disambiguation {
+        query: String,
+        candidates: Vec<InspectCandidate>,
+    },
+}
+
+/// One disambiguation candidate shown to the user.
+#[derive(Debug, Clone)]
+pub struct InspectCandidate {
+    pub full_path: String,
+    pub kind: String,
+    pub first_doc_line: Option<String>,
+}
+
 /// Handles inspect_item requests by resolving paths or searching across crates.
-/// Attempts path resolution first for explicit paths, falls back to fuzzy search if needed.
+///
+/// This is the string-returning wrapper. For programmatic access or tests,
+/// call [`handle_inspect_item_structured`] directly.
 #[tracing::instrument(skip_all, fields(query = %request.query))]
 pub async fn handle_inspect_item(
     state: &Arc<DocState>,
     request: InspectItemRequest,
 ) -> Result<String, String> {
+    let structured = handle_inspect_item_structured(state, request).await?;
+    Ok(render_inspect_result(&structured))
+}
+
+/// Structured variant of [`handle_inspect_item`].
+///
+/// Returns a typed [`StructuredInspectResult`] rather than rendered text.
+/// Errors (missing workspace, no matches, kind mismatch) still surface as
+/// `Err(String)` so callers can display them uniformly.
+#[tracing::instrument(skip_all, fields(query = %request.query))]
+pub async fn handle_inspect_item_structured(
+    state: &Arc<DocState>,
+    request: InspectItemRequest,
+) -> Result<StructuredInspectResult, String> {
     // Parse the item path to check if it targets stdlib
     let path_check = parse_item_path(&request.query);
 
@@ -52,7 +109,7 @@ pub async fn handle_inspect_item(
     // If targeting stdlib and stdlib is available, handle it directly
     if targets_stdlib && let Some(stdlib) = state.stdlib() {
         tracing::debug!(query = %request.query, "Routing to stdlib handler");
-        return handle_stdlib_inspect(stdlib, &request).await;
+        return stdlib_inspect_structured(stdlib, &request, false).await;
     }
 
     // Try workspace-based lookup
@@ -61,15 +118,7 @@ pub async fn handle_inspect_item(
         None => {
             // No workspace - try stdlib fallback for common types
             if let Some(stdlib) = state.stdlib() {
-                // Try to find common types in stdlib (Vec, HashMap, String, etc.)
-                return handle_stdlib_inspect(stdlib, &request).await
-                    .map(|mut result| {
-                        // Add a hint that we're showing stdlib only
-                        let hint = "\n---\nNote: No workspace configured. Showing standard library only.\n\
-                                    Use set_workspace to search additional crates.";
-                        result.push_str(hint);
-                        result
-                    });
+                return stdlib_inspect_structured(stdlib, &request, true).await;
             }
 
             tracing::warn!("No workspace configured and stdlib not available");
@@ -101,20 +150,14 @@ pub async fn handle_inspect_item(
             .map(CrateName::new_unchecked),
     );
 
-    // Create single QueryContext for the entire request (path resolution, search, and module traversal)
     let query_ctx = QueryContext::new(Arc::new(workspace_ctx.clone()));
 
-    // Check if this is a path query (contains ::)
     let is_path_query = path.path_components.len() > 1 || request.query.contains("::");
-
-    // Check if the query specifies a crate (e.g., "serde::Serialize")
     let specified_crate = resolve_crate_from_path(&mut path, &known_crates);
 
     if is_path_query && specified_crate.is_some() {
-        // Path query with explicit crate - try resolve_path first
         let crate_name = specified_crate.clone().unwrap();
 
-        // Build full path string (crate_name::path::components)
         let full_path = if path.path_components.is_empty() {
             crate_name.as_str().to_string()
         } else {
@@ -127,11 +170,9 @@ pub async fn handle_inspect_item(
 
         let mut suggestions = Vec::new();
 
-        // Try path resolution for direct lookup
         if let Some(item_ref) = query_ctx.resolve_path(&full_path, &mut suggestions) {
             tracing::debug!(path = %full_path, "Resolved item via direct path lookup");
 
-            // Apply kind filter if specified
             if let Some(kind_filter) = request.kind
                 && !matches_kind(item_ref.inner(), kind_filter)
             {
@@ -142,18 +183,17 @@ pub async fn handle_inspect_item(
                 ));
             }
 
-            // Use ItemRef directly - no need to reload documentation
-            return format_item_output(item_ref, request.detail_level, crate_name.as_str());
+            return Ok(build_item_result(
+                item_ref,
+                request.detail_level,
+                crate_name.as_str(),
+            )?);
         }
-
-        // Path resolution failed - fall back to search within this crate
-        // (handles re-exports that aren't in the module hierarchy)
     }
 
     // Fall back to search-based resolution for non-path queries or queries without crate
     let search_query = path.full_path();
 
-    // Determine which crates to search
     let crates_to_search: Vec<CrateName> = if let Some(crate_name) = specified_crate {
         vec![crate_name]
     } else {
@@ -166,18 +206,13 @@ pub async fn handle_inspect_item(
         crates
     };
 
-    // Search across all target crates using TF-IDF
     let mut all_results = Vec::new();
     let mut search_failures = Vec::new();
-    // Tracks the actual kinds of items excluded by the kind filter, for error hints.
     let mut kind_filtered_kinds: Vec<String> = Vec::new();
 
-    // Limit total results to prevent unbounded memory growth
     const MAX_TOTAL_RESULTS: usize = 500;
 
-    // Reuse the existing QueryContext for search operations
     for crate_name in &crates_to_search {
-        // Early termination if we have enough results
         if all_results.len() >= MAX_TOTAL_RESULTS {
             tracing::debug!(
                 max_results = MAX_TOTAL_RESULTS,
@@ -186,18 +221,15 @@ pub async fn handle_inspect_item(
             break;
         }
 
-        // Load search index for this crate
         let index = match TermIndex::load_or_build(&query_ctx, crate_name.as_str()) {
             Ok(index) => index,
             Err(suggestions) => {
-                // Log the failure for debugging
                 tracing::warn!(
                     crate_name = %crate_name,
                     suggestion_count = suggestions.len(),
                     "Failed to load search index for crate"
                 );
 
-                // Track for user-facing error messages.
                 // Suppress "did you mean" suggestions for stdlib crates — they always
                 // suggest the workspace crate, which is misleading noise.
                 let error_msg = if !suggestions.is_empty()
@@ -215,21 +247,16 @@ pub async fn handle_inspect_item(
             }
         };
 
-        // Calculate how many results we can still accept
         let remaining = MAX_TOTAL_RESULTS - all_results.len();
         let limit = remaining.min(50);
 
-        // Perform TF-IDF search
         let search_results = index.search(&search_query, limit);
 
-        // Convert indexer::SearchResult to types::DetailedSearchResult and filter
         for search_result in search_results {
-            // Resolve the item from item_path
             if let Some((item_ref, path_segments)) = query_ctx.get_item_from_id_path(
                 search_result.item.crate_name.as_str(),
                 &search_result.item.item_path,
             ) {
-                // Apply kind filter if specified
                 if let Some(kind_filter) = request.kind
                     && !matches_kind(item_ref.inner(), kind_filter)
                 {
@@ -237,7 +264,6 @@ pub async fn handle_inspect_item(
                     continue;
                 }
 
-                // Convert to old SearchResult format for compatibility
                 let result = DetailedSearchResult {
                     name: item_ref.name().unwrap_or("<unnamed>").to_string(),
                     path: path_segments.join("::"),
@@ -245,7 +271,7 @@ pub async fn handle_inspect_item(
                     crate_name: Some(search_result.item.crate_name.clone()),
                     docs: item_ref.comment().map(|s| s.to_string()),
                     id: Some(item_ref.id),
-                    relevance: (search_result.rank * 100.0) as u32, // Convert float rank to u32
+                    relevance: (search_result.rank * 100.0) as u32,
                     source_crate: Some(crate_name.clone()),
                 };
 
@@ -274,37 +300,39 @@ pub async fn handle_inspect_item(
             if let Some(id) = &result.id {
                 seen_ids.insert(*id)
             } else {
-                true // Keep items without IDs
+                true
             }
         });
     }
 
     // For simple name queries (no ::), prioritize exact name matches to avoid
-    // unnecessary disambiguation when user clearly wants a specific item
+    // unnecessary disambiguation when user clearly wants a specific item.
+    // This also guards against spurious TF-IDF hits when the query is a
+    // multi-token identifier (e.g. "QueryContext" partially matching items
+    // that share only the "Context" token).
     let is_simple_name = !request.query.contains("::");
-    if is_simple_name && all_results.len() > 1 {
+    if is_simple_name && !all_results.is_empty() {
         let query_lower = request.query.to_lowercase();
         let exact_match_count = all_results
             .iter()
             .filter(|r| r.name.to_lowercase() == query_lower)
             .count();
 
-        // If exactly one item has an exact name match, filter to just that item
-        if exact_match_count == 1 {
+        if exact_match_count >= 1 {
+            // Prefer exact-name matches. If only one, we auto-resolve; if many,
+            // disambiguation downstream still handles it correctly.
             all_results.retain(|r| r.name.to_lowercase() == query_lower);
-        } else if exact_match_count == 0 {
-            // No exact matches - check if the query looks like a specific identifier
-            // (CamelCase or contains numbers) that should match exactly
+        } else {
+            // No exact matches. If the query looks like a specific identifier
+            // (CamelCase or contains digits), treat partial-token hits as
+            // "not found" rather than returning unrelated items.
             let looks_like_specific_name = query_lower.chars().any(|c| c.is_ascii_digit())
                 || request.query.chars().any(|c| c.is_uppercase());
 
             if looks_like_specific_name {
-                // Query looks like a specific identifier but no exact match exists
-                // Treat as "not found" rather than showing unrelated partial matches
                 all_results.clear();
             }
         }
-        // If 2+ exact matches, fall through to normal disambiguation
     }
 
     if all_results.is_empty() {
@@ -312,13 +340,12 @@ pub async fn handle_inspect_item(
             "No items found matching '{}'{}",
             search_query,
             if let Some(k) = request.kind {
-                format!(" with kind '{:?}'", k)
+                format!(" with kind '{k:?}'")
             } else {
                 String::new()
             }
         );
 
-        // When kind filtering excluded results, tell the user what kinds were actually found.
         if !kind_filtered_kinds.is_empty() {
             let mut unique_kinds = kind_filtered_kinds.clone();
             unique_kinds.sort();
@@ -331,11 +358,10 @@ pub async fn handle_inspect_item(
             );
         }
 
-        // Add failure context if crates failed to load
         if !search_failures.is_empty() {
             error_msg.push_str("\n\nFailed to search in the following crates:");
             for (crate_name, error) in search_failures.iter().take(5) {
-                let _ = write!(&mut error_msg, "\n  - {}: {}", crate_name, error);
+                let _ = write!(&mut error_msg, "\n  - {crate_name}: {error}");
             }
 
             if search_failures.len() > 5 {
@@ -350,7 +376,6 @@ pub async fn handle_inspect_item(
         return Err(error_msg);
     }
 
-    // Log if we have results but also had some failures
     if !search_failures.is_empty() {
         tracing::info!(
             successful = crates_to_search.len() - search_failures.len(),
@@ -365,11 +390,12 @@ pub async fn handle_inspect_item(
             query = %search_query,
             "Multiple matches found, returning disambiguation"
         );
-        return Ok(format_disambiguation(
-            &all_results,
-            &search_query,
-            crates_to_search.first().unwrap().as_str(),
-        ));
+        let candidates =
+            build_candidates(&all_results, crates_to_search.first().map(|c| c.as_str()));
+        return Ok(StructuredInspectResult::Disambiguation {
+            query: search_query,
+            candidates,
+        });
     }
 
     let result = &all_results[0];
@@ -381,8 +407,6 @@ pub async fn handle_inspect_item(
         .ok_or_else(|| "No crate information for matched item".to_string())?
         .as_str();
 
-    // Get the item directly from the already-loaded documentation via QueryContext
-    // This avoids reloading docs which would fail in isolated test environments
     let item_id = result.id.as_ref().ok_or_else(|| {
         format!(
             "Item '{}' ({}) at '{}' has no ID in search results",
@@ -390,7 +414,6 @@ pub async fn handle_inspect_item(
         )
     })?;
 
-    // Try to get the item from the query context's cache (already loaded during search)
     let item = query_ctx
         .load_crate(crate_name)
         .ok()
@@ -402,7 +425,6 @@ pub async fn handle_inspect_item(
             )
         })?;
 
-    // Skip impl blocks (shouldn't happen, but safeguard)
     if matches!(item.inner(), ItemEnum::Impl(_)) {
         return Err(format!(
             "Internal error: Found impl block for query '{}'. Please report this bug.",
@@ -410,55 +432,101 @@ pub async fn handle_inspect_item(
         ));
     }
 
-    format_item_output(item, request.detail_level, crate_name)
+    build_item_result(item, request.detail_level, crate_name)
 }
 
-/// Format disambiguation output when multiple items match
-fn format_disambiguation(
-    results: &[DetailedSearchResult],
-    query: &str,
+/// Build a [`StructuredInspectResult::Item`] from a resolved [`ItemRef`].
+///
+/// Renders the item via [`format_item_output`] and captures its structural
+/// fields (fully-qualified path, kind) alongside the rendered blob.
+///
+/// `path_string()` already includes the crate segment (e.g.
+/// `"std::collections::HashMap"`), so we do **not** re-prefix with
+/// `crate_name`. When the path is unavailable, fall back to
+/// `{crate_name}::{name}`.
+fn build_item_result(
+    item: ItemRef<'_, Item>,
+    detail_level: DetailLevel,
     crate_name: &str,
-) -> String {
-    let mut error = format!(
-        "
-// Multiple items found matching '{}'. Please be more specific:\n\n",
-        query
-    );
+) -> Result<StructuredInspectResult, String> {
+    let kind = format!("{:?}", item.kind());
+    let name = item.name().unwrap_or("<unnamed>").to_string();
+    let full_path = item
+        .path_string()
+        .unwrap_or_else(|| format!("{crate_name}::{name}"));
 
-    for (i, result) in results.iter().enumerate().take(10) {
-        // Show crate name prefix in the path
-        let full_path = if let Some(src_crate) = &result.source_crate {
-            format!("{}::{}", src_crate.as_str(), result.path)
-        } else {
-            format!("{}::{}", crate_name, result.path)
-        };
+    let rendered = format_item_output(item, detail_level, crate_name)?;
 
-        let _ = write!(&mut error, "{}. {} [{}]", i + 1, full_path, result.kind);
+    Ok(StructuredInspectResult::Item {
+        full_path,
+        kind,
+        crate_name: crate_name.to_string(),
+        rendered,
+    })
+}
 
-        // Only show docs if they exist and are non-empty
-        if let Some(docs) = &result.docs {
-            let docs_trimmed = docs.trim();
-            if !docs_trimmed.is_empty()
-                && let Some(first_line) = docs_trimmed.lines().next()
-            {
-                let first_line_trimmed = first_line.trim();
-                if !first_line_trimmed.is_empty() {
-                    let _ = write!(&mut error, " - {}", first_line_trimmed);
-                }
+/// Convert accumulated [`DetailedSearchResult`]s into structured candidates
+/// for disambiguation, preserving the crate prefix and first doc line.
+fn build_candidates(
+    results: &[DetailedSearchResult],
+    fallback_crate: Option<&str>,
+) -> Vec<InspectCandidate> {
+    results
+        .iter()
+        .take(10)
+        .map(|result| {
+            let full_path = if let Some(src_crate) = &result.source_crate {
+                format!("{}::{}", src_crate.as_str(), result.path)
+            } else if let Some(fc) = fallback_crate {
+                format!("{}::{}", fc, result.path)
+            } else {
+                result.path.clone()
+            };
+
+            let first_doc_line = result.docs.as_ref().and_then(|docs| {
+                docs.lines()
+                    .find(|line| !line.trim().is_empty())
+                    .map(|line| line.trim().to_string())
+            });
+
+            InspectCandidate {
+                full_path,
+                kind: result.kind.clone(),
+                first_doc_line,
             }
+        })
+        .collect()
+}
+
+/// Render a [`StructuredInspectResult`] into the human-readable MCP output format.
+fn render_inspect_result(result: &StructuredInspectResult) -> String {
+    match result {
+        StructuredInspectResult::Item { rendered, .. } => rendered.clone(),
+        StructuredInspectResult::Disambiguation { query, candidates } => {
+            format_candidates(query, candidates)
         }
-
-        let _ = writeln!(&mut error);
     }
+}
 
-    if results.len() > 10 {
-        let _ = writeln!(&mut error, "\n... and {} more matches", results.len() - 10);
+/// Render the disambiguation candidate list for a failing single-item resolution.
+fn format_candidates(query: &str, candidates: &[InspectCandidate]) -> String {
+    let mut error =
+        format!("\n// Multiple items found matching '{query}'. Please be more specific:\n\n");
+
+    for (i, cand) in candidates.iter().enumerate() {
+        let _ = write!(&mut error, "{}. {} [{}]", i + 1, cand.full_path, cand.kind);
+        if let Some(line) = &cand.first_doc_line
+            && !line.is_empty()
+        {
+            let _ = write!(&mut error, " - {line}");
+        }
+        let _ = writeln!(&mut error);
     }
 
     error
 }
 
-/// Format item output based on type and verbosity
+/// Format item output based on type and verbosity.
 fn format_item_output(
     item: ItemRef<'_, Item>,
     detail_level: DetailLevel,
@@ -493,80 +561,48 @@ fn format_item_output(
         }
     };
 
-    result.map_err(|e| format!("Formatting error: {}", e))?;
+    result.map_err(|e| format!("Formatting error: {e}"))?;
     Ok(output)
 }
 
-/// Handle inspect_item for stdlib crates when no workspace is available.
-async fn handle_stdlib_inspect(
-    stdlib: &Arc<crate::stdlib::StdlibDocs>,
+/// Structured handler for stdlib `inspect_item` queries.
+///
+/// If `add_no_workspace_hint` is true, the rendered Item output will be
+/// postfixed with a hint that no workspace is configured — preserving the
+/// behavior of the previous string handler for the workspace-less fallback.
+async fn stdlib_inspect_structured(
+    stdlib: &Arc<StdlibDocs>,
     request: &InspectItemRequest,
-) -> Result<String, String> {
+    add_no_workspace_hint: bool,
+) -> Result<StructuredInspectResult, String> {
     let path = parse_item_path(&request.query);
 
-    // Determine which stdlib crate to search
     let (target_crate, search_name) = if let Some(first) = path.path_components.first() {
         if StdlibDocs::is_stdlib_crate(first) {
-            // Query is like "std::vec::Vec" - search in specified crate
             let remaining: Vec<_> = path.path_components.iter().skip(1).cloned().collect();
             let search = if remaining.is_empty() {
-                first.clone() // Just "std" - return the crate root
+                first.clone()
             } else {
                 remaining.last().cloned().unwrap_or_default()
             };
             (first.clone(), search)
         } else {
-            // Query is like "Vec" - search in std first
             ("std".to_string(), first.clone())
         }
     } else {
         return Err("Empty query".to_string());
     };
 
-    // Load the stdlib crate
-    let _crate_index = stdlib
-        .load(&target_crate)
-        .await
-        .map_err(|e| format!("Failed to load {} documentation: {}", target_crate, e))?;
+    let query_ctx = stdlib.build_query_context(&target_crate).await?;
 
-    // Build a minimal workspace context for stdlib
-    use crate::workspace::{CrateMetadata, CrateOrigin, WorkspaceContext};
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
-    let mut crate_info = HashMap::new();
-    let crate_name_key = CrateName::new_unchecked(target_crate.clone());
-    crate_info.insert(
-        crate_name_key.clone(),
-        CrateMetadata {
-            origin: CrateOrigin::Standard,
-            name: CrateName::new_unchecked(target_crate.clone()),
-            version: Some("nightly".to_string()),
-            description: None,
-            dev_dep: false,
-            is_root_crate: false,
-            used_by: vec![],
-        },
-    );
-
-    let stdlib_ctx = WorkspaceContext {
-        root: PathBuf::from("/"),
-        members: vec![],
-        crate_info,
-        root_crate: None,
-    };
-
-    let query_ctx = QueryContext::new(Arc::new(stdlib_ctx));
-
-    // Try path resolution first
     let full_path = if path.path_components.len() > 1 {
         path.path_components.join("::")
     } else {
-        format!("{}::{}", target_crate, search_name)
+        format!("{target_crate}::{search_name}")
     };
 
-    // Path resolution - use a scope to ensure suggestions is dropped before any await
-    let path_result = {
+    // Path resolution first
+    let path_result: Option<Result<StructuredInspectResult, String>> = {
         let mut suggestions = Vec::new();
         query_ctx
             .resolve_path(&full_path, &mut suggestions)
@@ -579,17 +615,17 @@ async fn handle_stdlib_inspect(
                         request.query, kind_filter
                     ));
                 }
-                format_item_output(item_ref, request.detail_level, &target_crate)
+                build_item_result(item_ref, request.detail_level, &target_crate)
             })
     };
 
     if let Some(result) = path_result {
-        return result;
+        return maybe_append_hint(result, add_no_workspace_hint);
     }
 
     // Fall back to search
     let index = TermIndex::load_or_build(&query_ctx, &target_crate)
-        .map_err(|_| format!("Failed to build search index for {}", target_crate))?;
+        .map_err(|_| format!("Failed to build search index for {target_crate}"))?;
 
     let results = index.search(&search_name, 10);
     let available_crates = stdlib.available_crates();
@@ -611,9 +647,8 @@ async fn handle_stdlib_inspect(
         ));
     }
 
-    // Get the best match
     let best = &results[0];
-    if let Some((item_ref, _path_segments)) =
+    if let Some((item_ref, _)) =
         query_ctx.get_item_from_id_path(best.item.crate_name.as_str(), &best.item.item_path)
     {
         if let Some(kind_filter) = request.kind
@@ -624,9 +659,41 @@ async fn handle_stdlib_inspect(
                 request.query, kind_filter
             ));
         }
-        return format_item_output(item_ref, request.detail_level, &target_crate);
+        let result = build_item_result(item_ref, request.detail_level, &target_crate);
+        return maybe_append_hint(result, add_no_workspace_hint);
     }
 
     tracing::debug!(query = %request.query, "Failed to resolve item in stdlib");
     Err(format!("Failed to resolve item '{}'", request.query))
+}
+
+/// Append a "no workspace configured" hint to a stdlib Item result's rendered
+/// output, matching the behavior of the original string handler's fallback.
+fn maybe_append_hint(
+    result: Result<StructuredInspectResult, String>,
+    add_hint: bool,
+) -> Result<StructuredInspectResult, String> {
+    if !add_hint {
+        return result;
+    }
+    result.map(|r| match r {
+        StructuredInspectResult::Item {
+            full_path,
+            kind,
+            crate_name,
+            mut rendered,
+        } => {
+            rendered.push_str(
+                "\n---\nNote: No workspace configured. Showing standard library only.\n\
+                 Use set_workspace to search additional crates.",
+            );
+            StructuredInspectResult::Item {
+                full_path,
+                kind,
+                crate_name,
+                rendered,
+            }
+        }
+        other => other,
+    })
 }

@@ -11,11 +11,12 @@ pub(crate) mod scoring;
 pub(crate) mod tokenize;
 
 // Public re-exports (used via lib.rs)
-pub use query::QueryContext;
+pub use index::metrics as index_metrics;
+pub use query::{PreloadedCrate, QueryContext};
 pub use rustdoc::ItemKind;
 
 // Internal re-exports
-pub(crate) use index::{DetailedSearchResult, SearchMatch, TermIndex};
+pub(crate) use index::{DetailedSearchResult, TermIndex};
 pub(crate) use query::{parse_item_path, resolve_crate_from_path};
 pub(crate) use rustdoc::{CrateIndex, item_enum_to_kind, item_kind_str, matches_kind};
 pub(crate) use scoring::path_canonicality_score;

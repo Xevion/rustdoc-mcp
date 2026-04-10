@@ -231,21 +231,34 @@ async fn inspect_local_trait(isolated_workspace: IsolatedWorkspace) {
     check!(output.contains("struct"));
 }
 
-/// Test: Find BackgroundWorker struct (public export).
+/// Test: Find ServiceContext struct by simple name (CamelCase hazard).
+///
+/// Regression guard for the CamelCase partial-token TF-IDF hazard the
+/// `handle_inspect_item_structured` disambiguation logic guards against.
+/// "ServiceContext" tokenizes into ["service", "context"], and "context"
+/// partially matches QueryContext, WorkspaceContext, and several other
+/// types in the workspace. The exact-name filter must prefer the one
+/// result whose lowercased name equals "servicecontext" over all the
+/// partial hits, otherwise the user sees a noisy disambiguation list.
+///
+/// This test replaces a previous `BackgroundWorker` test that was deleted
+/// when `BackgroundWorker` became a private struct (as part of the
+/// cancellation-aware worker refactor in 996a19d) — but the underlying
+/// hazard it exercised is still worth covering.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn inspect_local_backgroundworker(isolated_workspace: IsolatedWorkspace) {
+async fn inspect_local_servicecontext(isolated_workspace: IsolatedWorkspace) {
     let request = InspectItemRequest {
-        query: "BackgroundWorker".to_string(),
+        query: "ServiceContext".to_string(),
         kind: Some(ItemKind::Struct),
         detail_level: DetailLevel::Medium,
     };
 
     let_assert!(
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
-        "Should find BackgroundWorker struct"
+        "Should find ServiceContext struct via simple-name exact-match disambiguation"
     );
-    check!(output.contains("BackgroundWorker"));
+    check!(output.contains("ServiceContext"));
     check!(output.contains("struct"));
 }
 

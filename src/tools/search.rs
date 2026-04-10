@@ -1,15 +1,27 @@
 //! TF-IDF search handler for finding documentation items.
+//!
+//! # Structured and rendered APIs
+//!
+//! This module exposes two layers:
+//!
+//! - [`handle_search_structured`] returns a typed [`StructuredSearchResult`]
+//!   that tests and programmatic consumers can match on. It contains
+//!   fully-qualified paths, kinds, relevance scores, and first doc lines —
+//!   no presentation concerns.
+//! - [`handle_search`] wraps the structured variant and renders it into the
+//!   human-readable string format exposed over the MCP tool interface.
+//!
+//! Renderer changes never affect structured assertions, which eliminates the
+//! brittleness of string-containment tests on MCP output.
 
 use crate::{
     search::{QueryContext, TermIndex},
     stdlib::StdlibDocs,
-    types::CrateName,
     worker::DocState,
-    workspace::{CrateMetadata, CrateOrigin, WorkspaceContext},
 };
 use rmcp::schemars;
 use serde::Deserialize;
-use std::{collections::HashMap, fmt::Write as _, path::PathBuf, sync::Arc};
+use std::{fmt::Write as _, sync::Arc};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SearchRequest {
@@ -26,28 +38,89 @@ fn default_limit() -> Option<usize> {
     Some(10)
 }
 
-/// Execute the search operation using TF-IDF indexing.
+/// Structured result of a search operation, independent of any string rendering.
+///
+/// Tests should match on this to assert on concrete fields (full paths, kinds,
+/// relevance) rather than substring-matching the rendered output.
+#[derive(Debug, Clone)]
+pub enum StructuredSearchResult {
+    /// The search ran and returned at least one hit.
+    Hits {
+        crate_name: String,
+        query: String,
+        is_stdlib: bool,
+        hits: Vec<StructuredSearchHit>,
+    },
+    /// The search ran against a valid crate but found zero matches.
+    Empty { crate_name: String, query: String },
+    /// The target crate was not found. Suggestions may be provided.
+    CrateNotFound {
+        attempted: String,
+        suggestions: Vec<CrateSuggestion>,
+    },
+}
+
+/// A single search hit with all fields needed for rendering or programmatic use.
+#[derive(Debug, Clone)]
+pub struct StructuredSearchHit {
+    /// Fully-qualified path like `std::collections::HashMap`.
+    pub full_path: String,
+    /// Kind as a debug-printed string (e.g. `"Struct"`, `"Function"`, `"Trait"`).
+    pub kind: String,
+    /// Relevance on a 0-100 scale, normalized against the top result.
+    pub relevance: u32,
+    /// First non-empty line of the item's doc comment, if any.
+    pub first_doc_line: Option<String>,
+}
+
+/// A fuzzy crate-name suggestion surfaced when the requested crate cannot be resolved.
+#[derive(Debug, Clone)]
+pub struct CrateSuggestion {
+    pub path: String,
+    /// Optional kind (e.g. `"Crate"`, `"Module"`). When `None`, the suggestion
+    /// is a bare crate name.
+    pub kind: Option<String>,
+}
+
+/// Execute the search operation using TF-IDF indexing and return the rendered output.
+///
+/// This is the string-returning wrapper consumed by the MCP tool interface.
+/// For programmatic use or tests that want to assert on structured fields,
+/// call [`handle_search_structured`] directly.
 #[tracing::instrument(skip_all, fields(query = %request.query, crate_name = %request.crate_name))]
 pub async fn handle_search(
     state: &Arc<DocState>,
     request: SearchRequest,
 ) -> Result<String, String> {
-    // Check if searching a stdlib crate
+    let structured = handle_search_structured(state, request).await?;
+    Ok(render_search_result(&structured))
+}
+
+/// Structured variant of [`handle_search`].
+///
+/// Returns a [`StructuredSearchResult`] rather than a rendered string.
+/// Errors (missing workspace, stdlib not available) still surface as `Err(String)`
+/// so they can be displayed uniformly by callers.
+#[tracing::instrument(skip_all, fields(query = %request.query, crate_name = %request.crate_name))]
+pub async fn handle_search_structured(
+    state: &Arc<DocState>,
+    request: SearchRequest,
+) -> Result<StructuredSearchResult, String> {
+    // Route stdlib crates to the dedicated handler.
     if StdlibDocs::is_stdlib_crate(&request.crate_name)
         && let Some(stdlib) = state.stdlib()
     {
         tracing::debug!(crate_name = %request.crate_name, "Routing search to stdlib");
-        return handle_stdlib_search(stdlib, &request).await;
+        return stdlib_search_structured(stdlib, &request).await;
     }
 
-    // Try workspace-based search
+    // Workspace-based search.
     let workspace_ctx = match state.workspace().await {
         Some(ctx) => ctx,
         None => {
-            // No workspace - check if we can search stdlib
             if let Some(stdlib) = state.stdlib() {
                 if StdlibDocs::is_stdlib_crate(&request.crate_name) {
-                    return handle_stdlib_search(stdlib, &request).await;
+                    return stdlib_search_structured(stdlib, &request).await;
                 }
 
                 return Err(format!(
@@ -72,11 +145,28 @@ pub async fn handle_search(
         }
     };
 
-    // Create QueryContext for this operation
-    let query_ctx = QueryContext::new(Arc::new(workspace_ctx.clone()));
+    let query_ctx = QueryContext::new(Arc::new(workspace_ctx));
+    run_search(&query_ctx, &request, false)
+}
 
-    // Load or build search index
-    let index = match TermIndex::load_or_build(&query_ctx, &request.crate_name) {
+/// Structured stdlib search. Shared between the direct-route and the
+/// no-workspace-fallback paths in [`handle_search_structured`].
+async fn stdlib_search_structured(
+    stdlib: &Arc<StdlibDocs>,
+    request: &SearchRequest,
+) -> Result<StructuredSearchResult, String> {
+    let query_ctx = stdlib.build_query_context(&request.crate_name).await?;
+    run_search(&query_ctx, request, true)
+}
+
+/// Core search routine: resolves the crate, runs the query, and builds a
+/// [`StructuredSearchResult`]. Shared between workspace and stdlib paths.
+fn run_search(
+    query_ctx: &QueryContext,
+    request: &SearchRequest,
+    is_stdlib: bool,
+) -> Result<StructuredSearchResult, String> {
+    let index = match TermIndex::load_or_build(query_ctx, &request.crate_name) {
         Ok(index) => index,
         Err(mut suggestions) => {
             tracing::debug!(
@@ -84,205 +174,148 @@ pub async fn handle_search(
                 suggestions = suggestions.len(),
                 "Crate not found, returning suggestions"
             );
-            // Format suggestions for crate name
-            let mut result = format!(
-                "Crate '{}' not found. Did you mean one of these?\n\n",
-                &request.crate_name
-            );
             suggestions.sort_by(|a, b| b.score().total_cmp(&a.score()));
-            for suggestion in suggestions.into_iter().take(5).filter(|s| s.score() > 0.8) {
-                result
-                    .write_fmt(format_args!("• `{}`", suggestion.path()))
-                    .unwrap();
+            let suggestions: Vec<CrateSuggestion> = suggestions
+                .into_iter()
+                .take(5)
+                .filter(|s| s.score() > 0.8)
+                .map(|s| CrateSuggestion {
+                    path: s.path().to_string(),
+                    kind: s.item().map(|item| format!("{:?}", item.kind())),
+                })
+                .collect();
 
-                if let Some(item) = suggestion.item() {
-                    result
-                        .write_fmt(format_args!(" ({:?})\n", item.kind()))
-                        .unwrap();
-                } else {
-                    result.push_str(" (Crate)\n");
-                }
-            }
-            return Ok(result);
+            return Ok(StructuredSearchResult::CrateNotFound {
+                attempted: request.crate_name.clone(),
+                suggestions,
+            });
         }
     };
 
-    // Perform search
     let limit = request.limit.unwrap_or(10);
-    let results = index.search(&request.query, limit);
+    let matches = index.search(&request.query, limit);
 
     tracing::debug!(
         query = %request.query,
         crate_name = %request.crate_name,
-        result_count = results.len(),
+        result_count = matches.len(),
         "Search completed"
     );
 
-    if results.is_empty() {
-        tracing::debug!(
-            query = %request.query,
-            crate_name = %request.crate_name,
-            "No search results found"
-        );
-        let mut msg = format!(
-            "No results found for '{}' in crate '{}'.\n\n",
-            request.query, request.crate_name
-        );
-
-        // Provide helpful suggestions
-        msg.push_str("Search tips:\n");
-        msg.push_str("• Try a shorter or more general term\n");
-        msg.push_str("• Search for types like 'HashMap', 'Vec', 'String'\n");
-        msg.push_str("• Try function names like 'parse', 'read', 'write'\n");
-        msg.push_str("• Search uses stemming: 'parsing' matches 'parse'\n");
-
-        // Check if query looks like it might be too specific
-        if request.query.contains("::") {
-            msg.push_str("• Note: Search by term only, not full paths\n");
-        }
-
-        return Ok(msg);
+    if matches.is_empty() {
+        return Ok(StructuredSearchResult::Empty {
+            crate_name: request.crate_name.clone(),
+            query: request.query.clone(),
+        });
     }
 
-    Ok(format_search_results(
-        &results,
-        &request.query,
-        &request.crate_name,
-        &query_ctx,
-        false,
-    ))
+    let max_score = matches.first().map(|r| r.rank).unwrap_or(1.0);
+    let hits: Vec<StructuredSearchHit> = matches
+        .iter()
+        .map(|m| {
+            let relevance = ((m.rank / max_score) * 100.0).round() as u32;
+            match query_ctx.get_item_from_id_path(m.item.crate_name.as_str(), &m.item.item_path) {
+                Some((item, path_segments)) => {
+                    let full_path = path_segments.join("::");
+                    let kind = format!("{:?}", item.kind());
+                    let first_doc_line = item.comment().and_then(|docs| {
+                        docs.lines()
+                            .find(|line| !line.trim().is_empty())
+                            .map(|line| line.trim().to_string())
+                    });
+                    StructuredSearchHit {
+                        full_path,
+                        kind,
+                        relevance,
+                        first_doc_line,
+                    }
+                }
+                None => StructuredSearchHit {
+                    full_path: "[Unable to resolve item]".to_string(),
+                    kind: "Unknown".to_string(),
+                    relevance,
+                    first_doc_line: None,
+                },
+            }
+        })
+        .collect();
+
+    Ok(StructuredSearchResult::Hits {
+        crate_name: request.crate_name.clone(),
+        query: request.query.clone(),
+        is_stdlib,
+        hits,
+    })
 }
 
-/// Format search results into a readable string output.
-fn format_search_results(
-    results: &[crate::search::SearchMatch],
-    query: &str,
+/// Render a [`StructuredSearchResult`] into the human-readable MCP output format.
+fn render_search_result(result: &StructuredSearchResult) -> String {
+    match result {
+        StructuredSearchResult::Hits {
+            crate_name,
+            query,
+            is_stdlib,
+            hits,
+        } => render_hits(crate_name, query, *is_stdlib, hits),
+        StructuredSearchResult::Empty { crate_name, query } => render_empty(crate_name, query),
+        StructuredSearchResult::CrateNotFound {
+            attempted,
+            suggestions,
+        } => render_crate_not_found(attempted, suggestions),
+    }
+}
+
+fn render_hits(
     crate_name: &str,
-    query_ctx: &QueryContext,
+    query: &str,
     is_stdlib: bool,
+    hits: &[StructuredSearchHit],
 ) -> String {
     let source = if is_stdlib { " (standard library)" } else { "" };
 
-    let mut output = format!(
-        "Search results for '{}' in '{}'{}:\n\n",
-        query, crate_name, source
-    );
+    let mut output = format!("Search results for '{query}' in '{crate_name}'{source}:\n\n");
 
-    let max_score = results.first().map(|r| r.rank).unwrap_or(1.0);
-
-    for (idx, result) in results.iter().enumerate() {
-        let relevance = ((result.rank / max_score) * 100.0).round() as u8;
-
-        match query_ctx
-            .get_item_from_id_path(result.item.crate_name.as_str(), &result.item.item_path)
-        {
-            Some((item, path_segments)) => {
-                let path = path_segments.join("::");
-                output
-                    .write_fmt(format_args!(
-                        "{}. `{}` ({:?}) - relevance: {}%\n",
-                        idx + 1,
-                        path,
-                        item.kind(),
-                        relevance
-                    ))
-                    .unwrap();
-
-                if let Some(docs) = item.comment() {
-                    let first_line = docs
-                        .lines()
-                        .find(|line| !line.trim().is_empty())
-                        .unwrap_or("");
-                    if !first_line.is_empty() {
-                        output
-                            .write_fmt(format_args!("   {}\n", first_line.trim()))
-                            .unwrap();
-                    }
-                }
-            }
-            None => {
-                output
-                    .write_fmt(format_args!(
-                        "{}. [Unable to resolve item] - relevance: {}%\n",
-                        idx + 1,
-                        relevance
-                    ))
-                    .unwrap();
-            }
-        };
-
+    for (idx, hit) in hits.iter().enumerate() {
+        let _ = writeln!(
+            &mut output,
+            "{}. `{}` ({}) - relevance: {}%",
+            idx + 1,
+            hit.full_path,
+            hit.kind,
+            hit.relevance
+        );
+        if let Some(line) = &hit.first_doc_line {
+            let _ = writeln!(&mut output, "   {line}");
+        }
         output.push('\n');
     }
 
     output
 }
 
-/// Handle search for stdlib crates without a workspace.
-async fn handle_stdlib_search(
-    stdlib: &Arc<StdlibDocs>,
-    request: &SearchRequest,
-) -> Result<String, String> {
-    // Load the stdlib crate docs
-    let _crate_index = stdlib.load(&request.crate_name).await.map_err(|e| {
-        tracing::error!(
-            crate_name = %request.crate_name,
-            error = ?e,
-            "Failed to load stdlib documentation"
-        );
-        format!("Failed to load {} documentation: {}", request.crate_name, e)
-    })?;
-
-    // Build a minimal workspace context for stdlib
-    let mut crate_info = HashMap::new();
-    crate_info.insert(
-        CrateName::new_unchecked(request.crate_name.clone()),
-        CrateMetadata {
-            origin: CrateOrigin::Standard,
-            name: CrateName::new_unchecked(request.crate_name.clone()),
-            version: Some("nightly".to_string()),
-            description: None,
-            dev_dep: false,
-            is_root_crate: false,
-            used_by: vec![],
-        },
-    );
-
-    let stdlib_ctx = WorkspaceContext {
-        root: PathBuf::from("/"),
-        members: vec![],
-        crate_info,
-        root_crate: None,
-    };
-
-    let query_ctx = QueryContext::new(Arc::new(stdlib_ctx));
-
-    // Load or build search index
-    let index = TermIndex::load_or_build(&query_ctx, &request.crate_name)
-        .map_err(|_| format!("Failed to build search index for {}", request.crate_name))?;
-
-    // Perform search
-    let limit = request.limit.unwrap_or(10);
-    let results = index.search(&request.query, limit);
-
-    if results.is_empty() {
-        let mut msg = format!(
-            "No results found for '{}' in '{}'.\n\n",
-            request.query, request.crate_name
-        );
-
-        msg.push_str("Search tips:\n");
-        msg.push_str("• Try a shorter or more general term\n");
-        msg.push_str("• Search for types like 'HashMap', 'Vec', 'String'\n");
-        msg.push_str("• Try function names like 'parse', 'read', 'write'\n");
-
-        return Ok(msg);
+fn render_empty(crate_name: &str, query: &str) -> String {
+    let mut msg = format!("No results found for '{query}' in crate '{crate_name}'.\n\n");
+    msg.push_str("Search tips:\n");
+    msg.push_str("• Try a shorter or more general term\n");
+    msg.push_str("• Search for types like 'HashMap', 'Vec', 'String'\n");
+    msg.push_str("• Try function names like 'parse', 'read', 'write'\n");
+    msg.push_str("• Search uses stemming: 'parsing' matches 'parse'\n");
+    if query.contains("::") {
+        msg.push_str("• Note: Search by term only, not full paths\n");
     }
+    msg
+}
 
-    Ok(format_search_results(
-        &results,
-        &request.query,
-        &request.crate_name,
-        &query_ctx,
-        true,
-    ))
+fn render_crate_not_found(attempted: &str, suggestions: &[CrateSuggestion]) -> String {
+    let mut result = format!("Crate '{attempted}' not found. Did you mean one of these?\n\n");
+    for suggestion in suggestions {
+        let _ = write!(&mut result, "• `{}`", suggestion.path);
+        match &suggestion.kind {
+            Some(kind) => {
+                let _ = writeln!(&mut result, " ({kind})");
+            }
+            None => result.push_str(" (Crate)\n"),
+        }
+    }
+    result
 }
