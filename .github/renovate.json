@@ -1,0 +1,119 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":semanticCommits"
+  ],
+  "description": "Renovate configuration for rustdoc-mcp with ecosystem grouping",
+  "schedule": ["at any time"],
+  "timezone": "America/Chicago",
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 4,
+  "separateMajorMinor": true,
+  "separateMultipleMajor": true,
+  "labels": ["dependencies"],
+  "minimumReleaseAge": "3 days",
+  "packageRules": [
+    {
+      "description": "Tokio async runtime ecosystem",
+      "groupName": "tokio-ecosystem",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tokio", "tokio-util", "futures"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust", "tokio"]
+    },
+    {
+      "description": "Serde and serialization ecosystem",
+      "groupName": "serde-ecosystem",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["serde", "serde_json", "postcard", "toml"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust", "serde"]
+    },
+    {
+      "description": "Rustdoc and cargo metadata parsing",
+      "groupName": "rustdoc-core",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["rustdoc-types", "cargo_metadata"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust", "rustdoc"]
+    },
+    {
+      "description": "MCP protocol implementation",
+      "groupName": "rmcp",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["rmcp"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust", "mcp"]
+    },
+    {
+      "description": "Search and text processing",
+      "groupName": "search-deps",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["rust-stemmers", "rapidfuzz", "ahash", "regex"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust", "search"]
+    },
+    {
+      "description": "Tracing and logging infrastructure",
+      "groupName": "tracing",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["tracing", "tracing-subscriber"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust", "tracing"]
+    },
+    {
+      "description": "Error handling libraries",
+      "groupName": "error-handling",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["thiserror", "anyhow"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust"]
+    },
+    {
+      "description": "Caching and performance primitives",
+      "groupName": "perf-deps",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["bumpalo", "xxhash-rust", "lru"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust"]
+    },
+    {
+      "description": "Filesystem and path utilities",
+      "groupName": "fs-utils",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["ignore", "dirs"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust"]
+    },
+    {
+      "description": "Rust dev and test dependencies",
+      "groupName": "rust-dev-deps",
+      "matchManagers": ["cargo"],
+      "matchDepTypes": ["dev-dependencies"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "rust", "dev"]
+    },
+    {
+      "description": "Rust major version updates - individual PRs without automerge",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["major"],
+      "labels": ["dependencies", "rust", "major"]
+    },
+    {
+      "description": "GitHub Actions updates - automerge patch and minor",
+      "groupName": "github-actions",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "labels": ["dependencies", "github-actions"],
+      "automerge": true
+    },
+    {
+      "description": "GitHub Actions major updates - individual PRs without automerge",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["major"],
+      "labels": ["dependencies", "github-actions", "major"]
+    }
+  ]
+}
