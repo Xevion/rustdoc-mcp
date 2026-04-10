@@ -257,7 +257,7 @@ impl StdlibDocs {
     }
 
     /// Get the sysroot path.
-    pub fn sysroot(&self) -> &PathBuf {
+    pub const fn sysroot(&self) -> &PathBuf {
         &self.sysroot
     }
 

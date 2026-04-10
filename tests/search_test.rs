@@ -18,7 +18,7 @@ async fn search_finds_querycontext(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "QueryContext".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(
@@ -44,7 +44,7 @@ async fn search_finds_servercontext(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "ServerContext".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
@@ -62,7 +62,7 @@ async fn search_finds_crateorigin(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "CrateOrigin".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
@@ -80,7 +80,7 @@ async fn search_finds_traititerator(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "TraitIterator".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
@@ -103,7 +103,7 @@ async fn search_finds_backgroundworker(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "BackgroundWorker".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
@@ -126,7 +126,7 @@ async fn search_finds_typeformatter_trait(isolated_workspace: IsolatedWorkspace)
     let request = SearchRequest {
         query: "TypeFormatter".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
@@ -148,7 +148,7 @@ async fn search_finds_module_cache(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "cache".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
@@ -170,7 +170,7 @@ async fn search_finds_itemref(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "ItemRef".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
@@ -189,7 +189,7 @@ async fn search_finds_serde_serialize(isolated_workspace_with_serde: IsolatedWor
     let request = SearchRequest {
         query: "Serialize".to_string(),
         crate_name: "serde".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
@@ -211,7 +211,7 @@ async fn search_finds_serde_deserialize(isolated_workspace_with_serde: IsolatedW
     let request = SearchRequest {
         query: "Deserialize".to_string(),
         crate_name: "serde".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
@@ -233,7 +233,7 @@ async fn search_finds_serde_deserializer(isolated_workspace_with_serde: Isolated
     let request = SearchRequest {
         query: "Deserializer".to_string(),
         crate_name: "serde".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
@@ -259,7 +259,7 @@ async fn search_with_fresh_index_build(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "QueryContext".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(
@@ -300,7 +300,7 @@ async fn search_works_with_warm_cache(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "ServerContext".to_string(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let_assert!(
@@ -323,7 +323,7 @@ async fn search_nonexistent_crate_error(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
         query: "anything".to_string(),
         crate_name: "nonexistent-crate-xyz".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     // Should return Ok with a suggestion message, not an Err
@@ -340,9 +340,9 @@ async fn search_nonexistent_crate_error(isolated_workspace: IsolatedWorkspace) {
 #[tokio::test(flavor = "multi_thread")]
 async fn search_empty_query(isolated_workspace: IsolatedWorkspace) {
     let request = SearchRequest {
-        query: "".to_string(),
+        query: String::new(),
         crate_name: "rustdoc-mcp".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     // Empty query should not panic
@@ -370,7 +370,7 @@ async fn concurrent_searches_same_crate(isolated_workspace: IsolatedWorkspace) {
             let request = SearchRequest {
                 query: query.clone(),
                 crate_name: "rustdoc-mcp".to_string(),
-                limit: Some(5),
+                limit: 5,
             };
             let result = handle_search(&context, request).await;
             (query, result)
@@ -409,7 +409,7 @@ async fn concurrent_cold_cache_searches(isolated_workspace: IsolatedWorkspace) {
             let request = SearchRequest {
                 query: "QueryContext".to_string(),
                 crate_name: "rustdoc-mcp".to_string(),
-                limit: Some(5),
+                limit: 5,
             };
             let result = handle_search(&context, request).await;
             (i, result)
@@ -452,6 +452,9 @@ async fn concurrent_mixed_operations(isolated_workspace: IsolatedWorkspace) {
         })
     };
 
+    // Spawn all tasks eagerly (collect is required — we need the spawns to race
+    // with cache warming below, not lazily when the iterator is drained).
+    #[allow(clippy::needless_collect)]
     let search_handles: Vec<_> = (0..5)
         .map(|i| {
             let context = isolated_workspace.state.clone();
@@ -461,7 +464,7 @@ async fn concurrent_mixed_operations(isolated_workspace: IsolatedWorkspace) {
                 let request = SearchRequest {
                     query: "ServerContext".to_string(),
                     crate_name: "rustdoc-mcp".to_string(),
-                    limit: Some(5),
+                    limit: 5,
                 };
                 handle_search(&context, request).await
             })
@@ -488,7 +491,7 @@ async fn search_finds_anyhow_error(isolated_workspace_with_anyhow: IsolatedWorks
     let request = SearchRequest {
         query: "Error".to_string(),
         crate_name: "anyhow".to_string(),
-        limit: Some(10),
+        limit: 10,
     };
 
     let_assert!(
@@ -514,7 +517,7 @@ async fn search_finds_anyhow_context(isolated_workspace_with_anyhow: IsolatedWor
     let request = SearchRequest {
         query: "Context".to_string(),
         crate_name: "anyhow".to_string(),
-        limit: Some(10),
+        limit: 10,
     };
 
     let_assert!(
@@ -540,7 +543,7 @@ async fn search_finds_anyhow_result(isolated_workspace_with_anyhow: IsolatedWork
     let request = SearchRequest {
         query: "Result".to_string(),
         crate_name: "anyhow".to_string(),
-        limit: Some(10),
+        limit: 10,
     };
 
     let_assert!(

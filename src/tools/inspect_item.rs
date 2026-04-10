@@ -11,11 +11,14 @@
 //!   human-readable MCP output.
 
 use crate::format::DetailLevel;
-use crate::format::renderers::*;
+use crate::format::renderers::{
+    render_constant, render_enum, render_function, render_module, render_static, render_struct,
+    render_trait, render_type_alias,
+};
 use crate::item::ItemRef;
 use crate::search::{
     DetailedSearchResult, ItemKind, QueryContext, TermIndex, item_kind_str, matches_kind,
-    parse_item_path, resolve_crate_from_path,
+    parse_item_path, resolve_crate_from_path, score_to_percent,
 };
 use crate::stdlib::StdlibDocs;
 use crate::types::CrateName;
@@ -40,7 +43,7 @@ pub struct InspectItemRequest {
     pub detail_level: DetailLevel,
 }
 
-fn default_detail_level() -> DetailLevel {
+const fn default_detail_level() -> DetailLevel {
     DetailLevel::Medium
 }
 
@@ -92,6 +95,7 @@ pub async fn handle_inspect_item(
 /// Errors (missing workspace, no matches, kind mismatch) still surface as
 /// `Err(String)` so callers can display them uniformly.
 #[tracing::instrument(skip_all, fields(query = %request.query))]
+#[allow(clippy::too_many_lines)]
 pub async fn handle_inspect_item_structured(
     state: &Arc<DocState>,
     request: InspectItemRequest,
@@ -103,8 +107,7 @@ pub async fn handle_inspect_item_structured(
     let targets_stdlib = path_check
         .path_components
         .first()
-        .map(|first| StdlibDocs::is_stdlib_crate(first))
-        .unwrap_or(false);
+        .is_some_and(|first| StdlibDocs::is_stdlib_crate(first));
 
     // If targeting stdlib and stdlib is available, handle it directly
     if targets_stdlib && let Some(stdlib) = state.stdlib() {
@@ -113,24 +116,21 @@ pub async fn handle_inspect_item_structured(
     }
 
     // Try workspace-based lookup
-    let workspace_ctx = match state.workspace().await {
-        Some(ctx) => ctx,
-        None => {
-            // No workspace - try stdlib fallback for common types
-            if let Some(stdlib) = state.stdlib() {
-                return stdlib_inspect_structured(stdlib, &request, true).await;
-            }
-
-            tracing::warn!("No workspace configured and stdlib not available");
-            return Err(
-                "No workspace configured and standard library docs not available.\n\n\
-                 To configure a workspace:\n\
-                 • Use set_workspace with a path to a Rust project\n\n\
-                 To enable standard library docs:\n\
-                 • Run: rustup component add rust-docs-json --toolchain nightly"
-                    .to_string(),
-            );
+    let Some(workspace_ctx) = state.workspace().await else {
+        // No workspace - try stdlib fallback for common types
+        if let Some(stdlib) = state.stdlib() {
+            return stdlib_inspect_structured(stdlib, &request, true).await;
         }
+
+        tracing::warn!("No workspace configured and stdlib not available");
+        return Err(
+            "No workspace configured and standard library docs not available.\n\n\
+             To configure a workspace:\n\
+             • Use set_workspace with a path to a Rust project\n\n\
+             To enable standard library docs:\n\
+             • Run: rustup component add rust-docs-json --toolchain nightly"
+                .to_string(),
+        );
     };
 
     // Parse the item path
@@ -183,11 +183,7 @@ pub async fn handle_inspect_item_structured(
                 ));
             }
 
-            return Ok(build_item_result(
-                item_ref,
-                request.detail_level,
-                crate_name.as_str(),
-            )?);
+            return build_item_result(item_ref, request.detail_level, crate_name.as_str());
         }
     }
 
@@ -237,7 +233,7 @@ pub async fn handle_inspect_item_structured(
                 {
                     format!(
                         "Documentation not found (did you mean: {}?)",
-                        suggestions.first().map(|s| s.path.as_str()).unwrap_or("")
+                        suggestions.first().map_or("", |s| s.path.as_str())
                     )
                 } else {
                     "Documentation not available".to_string()
@@ -269,9 +265,9 @@ pub async fn handle_inspect_item_structured(
                     path: path_segments.join("::"),
                     kind: item_kind_str(item_ref.inner()).to_string(),
                     crate_name: Some(search_result.item.crate_name.clone()),
-                    docs: item_ref.comment().map(|s| s.to_string()),
+                    docs: item_ref.comment().map(std::string::ToString::to_string),
                     id: Some(item_ref.id),
-                    relevance: (search_result.rank * 100.0) as u32,
+                    relevance: score_to_percent(search_result.rank),
                     source_crate: Some(crate_name.clone()),
                 };
 
@@ -327,7 +323,7 @@ pub async fn handle_inspect_item_structured(
             // (CamelCase or contains digits), treat partial-token hits as
             // "not found" rather than returning unrelated items.
             let looks_like_specific_name = query_lower.chars().any(|c| c.is_ascii_digit())
-                || request.query.chars().any(|c| c.is_uppercase());
+                || request.query.chars().any(char::is_uppercase);
 
             if looks_like_specific_name {
                 all_results.clear();
@@ -390,8 +386,12 @@ pub async fn handle_inspect_item_structured(
             query = %search_query,
             "Multiple matches found, returning disambiguation"
         );
-        let candidates =
-            build_candidates(&all_results, crates_to_search.first().map(|c| c.as_str()));
+        let candidates = build_candidates(
+            &all_results,
+            crates_to_search
+                .first()
+                .map(super::super::types::CrateName::as_str),
+        );
         return Ok(StructuredInspectResult::Disambiguation {
             query: search_query,
             candidates,
@@ -407,7 +407,7 @@ pub async fn handle_inspect_item_structured(
         .ok_or_else(|| "No crate information for matched item".to_string())?
         .as_str();
 
-    let item_id = result.id.as_ref().ok_or_else(|| {
+    let item_id = result.id.ok_or_else(|| {
         format!(
             "Item '{}' ({}) at '{}' has no ID in search results",
             result.name, result.kind, result.path
@@ -694,6 +694,6 @@ fn maybe_append_hint(
                 rendered,
             }
         }
-        other => other,
+        other @ StructuredInspectResult::Disambiguation { .. } => other,
     })
 }

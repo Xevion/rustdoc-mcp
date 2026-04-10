@@ -221,7 +221,7 @@ async fn cross_crate_resolution_completes_without_hanging() {
     let request = SearchRequest {
         query: "instrument".to_string(),
         crate_name: "tracing".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     // Should complete without infinite loop

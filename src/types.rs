@@ -28,7 +28,7 @@ pub enum TypeKind {
 impl TypeKind {
     /// Returns the Rust keyword for this type kind.
     #[inline]
-    pub fn keyword(&self) -> &'static str {
+    pub const fn keyword(&self) -> &'static str {
         match self {
             Self::Struct => "struct",
             Self::Enum => "enum",
@@ -61,7 +61,7 @@ pub enum Visibility {
 impl Visibility {
     /// Returns the Rust keyword for this visibility.
     #[inline]
-    pub fn keyword(&self) -> &'static str {
+    pub const fn keyword(&self) -> &'static str {
         match self {
             Self::Public => "pub",
         }
@@ -304,7 +304,7 @@ impl<'de> Deserialize<'de> for CrateName {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        CrateName::new(s).map_err(serde::de::Error::custom)
+        Self::new(s).map_err(serde::de::Error::custom)
     }
 }
 

@@ -68,9 +68,9 @@ impl QueryPath {
 /// Parse an item path query into components
 ///
 /// Examples:
-/// - `Vec` → path_components=["Vec"]
-/// - `std::vec::Vec` → path_components=["std", "vec", "Vec"]
-/// - `collections::HashMap` → path_components=["collections", "HashMap"]
+/// - `Vec` → `path_components = [Vec]`
+/// - `std::vec::Vec` → `path_components = [std, vec, Vec]`
+/// - `collections::HashMap` → `path_components = [collections, HashMap]`
 ///
 /// The crate name is resolved later with context knowledge of available crates
 pub(crate) fn parse_item_path(query: &str) -> QueryPath {
@@ -84,7 +84,7 @@ pub(crate) fn parse_item_path(query: &str) -> QueryPath {
         // Handle empty query
         QueryPath {
             crate_name: None,
-            path_components: vec!["".to_string()],
+            path_components: vec![String::new()],
         }
     } else {
         QueryPath {
@@ -151,7 +151,7 @@ impl<T> ArenaPtr<T> {
 
     /// Dereference the pointer with proper lifetime bounds.
     /// SAFETY: Caller must ensure the reference doesn't outlive the arena allocation.
-    unsafe fn as_ref<'a>(&self) -> &'a T {
+    const unsafe fn as_ref<'a>(&self) -> &'a T {
         // SAFETY: Upheld by caller - reference is valid for QueryContext lifetime
         unsafe { self.ptr.as_ref() }
     }
@@ -184,7 +184,7 @@ impl Debug for QueryContext {
             .field("doc_cache_len", &self.doc_cache.borrow().len())
             .field("failed_crates_len", &self.failed_crates.borrow().len())
             .field("preloaded_len", &self.preloaded.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -422,24 +422,21 @@ impl QueryContext {
         };
 
         // Load the crate with discovery (tries normal load, then discovers from JSON files)
-        let crate_index = match self.load_crate_with_discovery(crate_name) {
-            Ok(index) => index,
-            Err(_) => {
-                // Generate suggestions for available crates
-                suggestions.extend(
-                    self.workspace
-                        .members
-                        .iter()
-                        .map(|s| s.as_str())
-                        .chain(self.workspace.dependency_names())
-                        .map(|name| PathSuggestion {
-                            path: name.to_string(),
-                            item: None,
-                            score: jaro_winkler::similarity(crate_name.chars(), name.chars()),
-                        }),
-                );
-                return None;
-            }
+        let Ok(crate_index) = self.load_crate_with_discovery(crate_name) else {
+            // Generate suggestions for available crates
+            suggestions.extend(
+                self.workspace
+                    .members
+                    .iter()
+                    .map(super::super::types::CrateName::as_str)
+                    .chain(self.workspace.dependency_names())
+                    .map(|name| PathSuggestion {
+                        path: name.to_string(),
+                        item: None,
+                        score: jaro_winkler::similarity(crate_name.chars(), name.chars()),
+                    }),
+            );
+            return None;
         };
 
         // Get the root module
@@ -495,6 +492,7 @@ impl QueryContext {
     }
 
     /// Recursively traverse the module tree to find an item by path.
+    #[allow(clippy::self_only_used_in_recursion)]
     fn find_children_recursive<'a>(
         &'a self,
         item: ItemRef<'a, Item>,
@@ -508,10 +506,7 @@ impl QueryContext {
         }
 
         // Extract the next segment
-        let segment_end = remaining
-            .find("::")
-            .map(|x| index + x)
-            .unwrap_or(path.len());
+        let segment_end = remaining.find("::").map_or(path.len(), |x| index + x);
         let segment = &path[index..segment_end];
         let next_segment_start = path.len().min(segment_end + 2);
 
@@ -535,13 +530,12 @@ impl QueryContext {
         }
 
         // No match found - generate suggestions
-        suggestions.extend(self.generate_suggestions(item, path, index));
+        suggestions.extend(Self::generate_suggestions(item, path, index));
         None
     }
 
     /// Generate fuzzy suggestions for items that are similar to the query.
     fn generate_suggestions<'a>(
-        &'a self,
         item: ItemRef<'a, Item>,
         path: &str,
         index: usize,
@@ -568,7 +562,7 @@ impl QueryContext {
     pub fn get_item<'a>(
         &'a self,
         crate_index: &'a CrateIndex,
-        id: &Id,
+        id: Id,
     ) -> Option<ItemRef<'a, Item>> {
         crate_index
             .get_item(id)
@@ -592,11 +586,11 @@ impl QueryContext {
         }
 
         for id in ids {
-            item = item.get(&Id(*id))?;
+            item = item.get(Id(*id))?;
 
             // Handle re-exports
             if let ItemEnum::Use(use_item) = item.inner() {
-                if let Some(target_id) = &use_item.id {
+                if let Some(target_id) = use_item.id {
                     item = item
                         .get(target_id)
                         .or_else(|| self.resolve_path(&use_item.source, &mut vec![]))?;
@@ -639,12 +633,12 @@ impl<'a> PathSuggestion<'a> {
     }
 
     /// Get the associated item if available.
-    pub fn item(&self) -> Option<ItemRef<'a, Item>> {
+    pub const fn item(&self) -> Option<ItemRef<'a, Item>> {
         self.item
     }
 
     /// Get the relevance score (0.0 to 1.0, higher is better).
-    pub fn score(&self) -> f64 {
+    pub const fn score(&self) -> f64 {
         self.score
     }
 }

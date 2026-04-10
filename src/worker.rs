@@ -44,6 +44,12 @@ pub struct ServiceContext {
     tracker: TaskTracker,
 }
 
+impl Default for ServiceContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ServiceContext {
     /// Create a new service context.
     pub fn new() -> Self {
@@ -54,7 +60,7 @@ impl ServiceContext {
     }
 
     /// Get the cancellation token.
-    pub fn token(&self) -> &CancellationToken {
+    pub const fn token(&self) -> &CancellationToken {
         &self.token
     }
 
@@ -121,7 +127,7 @@ impl std::fmt::Debug for DocState {
             .field("in_flight_count", &self.in_flight.blocking_lock().len())
             .field("has_workspace", &self.workspace.blocking_read().is_some())
             .field("has_stdlib", &self.stdlib.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -154,7 +160,7 @@ impl DocState {
     }
 
     /// Get the stdlib documentation provider.
-    pub fn stdlib(&self) -> Option<&Arc<StdlibDocs>> {
+    pub const fn stdlib(&self) -> Option<&Arc<StdlibDocs>> {
         self.stdlib.as_ref()
     }
 
@@ -290,12 +296,18 @@ impl DocState {
         }
 
         // Cache on success
-        if let Ok(ref index) = result {
-            let mut cache = self.cache.write().await;
-            cache.put(key, index.clone());
-            tracing::debug!(crate_name, "Docs cached in memory");
-        } else if let Err(ref e) = result {
-            tracing::warn!(crate_name, error = %e, "Documentation generation failed");
+        match &result {
+            Ok(index) => {
+                let index = index.clone();
+                {
+                    let mut cache = self.cache.write().await;
+                    cache.put(key, index);
+                }
+                tracing::debug!(crate_name, "Docs cached in memory");
+            }
+            Err(e) => {
+                tracing::warn!(crate_name, error = %e, "Documentation generation failed");
+            }
         }
 
         result
@@ -332,7 +344,7 @@ struct BackgroundWorker {
 }
 
 impl BackgroundWorker {
-    fn new(state: Arc<DocState>, ctx: ServiceContext) -> Self {
+    const fn new(state: Arc<DocState>, ctx: ServiceContext) -> Self {
         Self { state, ctx }
     }
 
@@ -366,8 +378,7 @@ impl BackgroundWorker {
         let current_workspace = self.state.workspace().await;
         let workspace_changed = current_workspace
             .as_ref()
-            .map(|w| w.root != workspace_path)
-            .unwrap_or(true);
+            .is_none_or(|w| w.root != workspace_path);
 
         if !workspace_changed {
             tracing::debug!(workspace = %workspace_path.display(), "Workspace unchanged, scanning for uncached crates");

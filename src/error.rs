@@ -79,7 +79,7 @@ impl ToolError {
     /// Get optional help text for this error.
     ///
     /// Returns additional guidance for resolving the error, if available.
-    pub fn help(&self) -> Option<&'static str> {
+    pub const fn help(&self) -> Option<&'static str> {
         match self {
             Self::Config(e) => e.help(),
             Self::Load(e) => e.help(),
@@ -137,7 +137,7 @@ pub enum ConfigError {
 
 impl ConfigError {
     /// Get help text for this error.
-    pub fn help(&self) -> Option<&'static str> {
+    pub const fn help(&self) -> Option<&'static str> {
         match self {
             Self::NoWorkspace => Some(
                 "To configure a workspace:\n\
@@ -196,7 +196,7 @@ pub enum LoadError {
 
 impl LoadError {
     /// Get help text for this error.
-    pub fn help(&self) -> Option<&'static str> {
+    pub const fn help(&self) -> Option<&'static str> {
         match self {
             Self::CrateNotFound { .. } => {
                 Some("Use inspect_crate without arguments to see available crates.")
@@ -254,7 +254,7 @@ pub enum QueryError {
 
 impl QueryError {
     /// Get help text for this error.
-    pub fn help(&self) -> Option<&'static str> {
+    pub const fn help(&self) -> Option<&'static str> {
         match self {
             Self::NotFound { .. } => Some(
                 "Search tips:\n\
@@ -289,7 +289,7 @@ pub enum ValidationError {
 
 impl ValidationError {
     /// Get help text for this error.
-    pub fn help(&self) -> Option<&'static str> {
+    pub const fn help(&self) -> Option<&'static str> {
         match self {
             Self::CrateName(e) => e.help(),
             Self::Version { .. } => {
@@ -317,7 +317,7 @@ pub enum CrateNameError {
 
 impl CrateNameError {
     /// Get help text for this error.
-    pub fn help(&self) -> Option<&'static str> {
+    pub const fn help(&self) -> Option<&'static str> {
         Some(
             "Crate names must:\n\
              • Start with a letter or underscore\n\

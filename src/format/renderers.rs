@@ -20,8 +20,7 @@ pub(crate) fn render_struct(
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| name.to_string());
+        .map_or_else(|| name.to_string(), |p| p.to_string());
     let fmt = TypeFormatter::new(item.crate_index());
 
     // Low: signature with generics
@@ -56,7 +55,7 @@ pub(crate) fn render_struct(
                 // Fields: is empty. Currently an all-private struct silently shows nothing.
                 let _ = has_stripped_fields;
                 for field_id in fields {
-                    if let Some(field_item) = item.get(field_id)
+                    if let Some(field_item) = item.get(*field_id)
                         && let ItemEnum::StructField(ty) = field_item.inner()
                     {
                         let field_name = field_item.name().unwrap_or("<unnamed>");
@@ -69,7 +68,7 @@ pub(crate) fn render_struct(
             rustdoc_types::StructKind::Tuple(fields) => {
                 for (i, field_id_opt) in fields.iter().enumerate() {
                     if let Some(field_id) = field_id_opt
-                        && let Some(field_item) = item.get(field_id)
+                        && let Some(field_item) = item.get(*field_id)
                         && let ItemEnum::StructField(ty) = field_item.inner()
                     {
                         write!(output, "  {}: ", i)?;
@@ -98,8 +97,7 @@ pub(crate) fn render_enum(
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| name.to_string());
+        .map_or_else(|| name.to_string(), |p| p.to_string());
     let fmt = TypeFormatter::new(item.crate_index());
 
     // Low: signature with generics
@@ -124,7 +122,7 @@ pub(crate) fn render_enum(
     // High: add variants
     if matches!(detail_level, DetailLevel::High) {
         writeln!(output, "\nVariants:")?;
-        for variant_id in &e.variants {
+        for &variant_id in &e.variants {
             if let Some(variant_item) = item.get(variant_id)
                 && let ItemEnum::Variant(v) = variant_item.inner()
             {
@@ -137,7 +135,7 @@ pub(crate) fn render_enum(
                         write!(output, "  {}(", variant_name)?;
                         for (i, field_id_opt) in fields.iter().enumerate() {
                             if let Some(field_id) = field_id_opt
-                                && let Some(field_item) = item.get(field_id)
+                                && let Some(field_item) = item.get(*field_id)
                                 && let ItemEnum::StructField(ty) = field_item.inner()
                             {
                                 if i > 0 {
@@ -151,7 +149,7 @@ pub(crate) fn render_enum(
                     rustdoc_types::VariantKind::Struct { fields, .. } => {
                         writeln!(output, "  {} {{", variant_name)?;
                         for field_id in fields {
-                            if let Some(field_item) = item.get(field_id)
+                            if let Some(field_item) = item.get(*field_id)
                                 && let ItemEnum::StructField(ty) = field_item.inner()
                             {
                                 let field_name = field_item.name().unwrap_or("<unnamed>");
@@ -181,8 +179,7 @@ pub(crate) fn render_function(
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| name.to_string());
+        .map_or_else(|| name.to_string(), |p| p.to_string());
     let fmt = TypeFormatter::new(item.crate_index());
 
     // Low: signature only
@@ -212,8 +209,7 @@ pub(crate) fn render_trait(
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| name.to_string());
+        .map_or_else(|| name.to_string(), |p| p.to_string());
     let fmt = TypeFormatter::new(item.crate_index());
 
     // Low: signature with generics and supertraits
@@ -241,7 +237,7 @@ pub(crate) fn render_trait(
     // High: add methods
     if matches!(detail_level, DetailLevel::High) {
         writeln!(output, "\nMethods:")?;
-        for item_id in &t.items {
+        for &item_id in &t.items {
             if let Some(method_item) = item.get(item_id)
                 && matches!(method_item.inner(), ItemEnum::Function(_))
             {
@@ -262,12 +258,24 @@ pub(crate) fn render_module(
     detail_level: DetailLevel,
     crate_name: &str,
 ) -> fmt::Result {
+    const CATEGORY_ORDER: &[(ItemKind, &str)] = &[
+        (ItemKind::Module, "Modules"),
+        (ItemKind::Struct, "Structs"),
+        (ItemKind::Enum, "Enums"),
+        (ItemKind::Trait, "Traits"),
+        (ItemKind::Union, "Unions"),
+        (ItemKind::TypeAlias, "Type Aliases"),
+        (ItemKind::Function, "Functions"),
+        (ItemKind::Constant, "Constants"),
+        (ItemKind::Static, "Statics"),
+        (ItemKind::Macro, "Macros"),
+    ];
+
     let default_name = crate_name.to_string();
     let name = item.name().unwrap_or(&default_name);
     let path = item
         .path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| name.to_string());
+        .map_or_else(|| name.to_string(), |p| p.to_string());
 
     writeln!(output, "module {}", name)?;
     writeln!(output, "// in {}::{}", crate_name, path)?;
@@ -298,19 +306,6 @@ pub(crate) fn render_module(
     }
 
     // Display in order
-    const CATEGORY_ORDER: &[(ItemKind, &str)] = &[
-        (ItemKind::Module, "Modules"),
-        (ItemKind::Struct, "Structs"),
-        (ItemKind::Enum, "Enums"),
-        (ItemKind::Trait, "Traits"),
-        (ItemKind::Union, "Unions"),
-        (ItemKind::TypeAlias, "Type Aliases"),
-        (ItemKind::Function, "Functions"),
-        (ItemKind::Constant, "Constants"),
-        (ItemKind::Static, "Statics"),
-        (ItemKind::Macro, "Macros"),
-    ];
-
     for (kind, category_name) in CATEGORY_ORDER {
         if let Some(items) = groups.get(kind) {
             if items.is_empty() {
@@ -383,8 +378,7 @@ pub(crate) fn render_type_alias(
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| name.to_string());
+        .map_or_else(|| name.to_string(), |p| p.to_string());
     let fmt = TypeFormatter::new(item.crate_index());
 
     write!(output, "type {}", name)?;
@@ -415,8 +409,7 @@ pub(crate) fn render_constant(
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| name.to_string());
+        .map_or_else(|| name.to_string(), |p| p.to_string());
     let fmt = TypeFormatter::new(item.crate_index());
 
     write!(output, "const {}: ", name)?;
@@ -445,8 +438,7 @@ pub(crate) fn render_static(
     let name = item.name().unwrap_or("<unnamed>");
     let path = item
         .path()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| name.to_string());
+        .map_or_else(|| name.to_string(), |p| p.to_string());
     let fmt = TypeFormatter::new(item.crate_index());
 
     write!(
@@ -470,8 +462,8 @@ pub(crate) fn render_static(
 }
 
 /// Generate a signature string for an item
-pub(crate) fn render_item_signature<'a>(
-    item: crate::item::ItemRef<'a, rustdoc_types::Item>,
+pub(crate) fn render_item_signature(
+    item: crate::item::ItemRef<'_, rustdoc_types::Item>,
 ) -> Option<String> {
     let name = item.name()?;
     let fmt = TypeFormatter::new(item.crate_index());
@@ -522,7 +514,7 @@ pub(crate) fn render_item_signature<'a>(
         _ => return None,
     };
 
-    result.ok().map(|_| s)
+    result.ok().map(|()| s)
 }
 
 /// Extract documentation summary (first paragraph) for truncated output

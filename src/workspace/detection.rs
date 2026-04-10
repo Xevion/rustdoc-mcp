@@ -110,15 +110,12 @@ pub fn find_cargo_toml_with_constraints(start: &Path) -> Option<PathBuf> {
         }
 
         // Move to parent directory
-        match current.parent() {
-            Some(parent) => {
-                current = parent.to_path_buf();
-                depth += 1;
-            }
-            None => {
-                tracing::debug!("Reached filesystem root");
-                break;
-            }
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+            depth += 1;
+        } else {
+            tracing::debug!("Reached filesystem root");
+            break;
         }
     }
 
@@ -262,12 +259,11 @@ pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
         }
 
         // Try parent directory
-        match current.parent() {
-            Some(parent) => current = parent.to_path_buf(),
-            None => {
-                tracing::debug!("Reached filesystem root without finding [workspace]");
-                break;
-            }
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+        } else {
+            tracing::debug!("Reached filesystem root without finding [workspace]");
+            break;
         }
     }
 

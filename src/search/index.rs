@@ -1,5 +1,9 @@
 //! TF-IDF inverted index implementation for full-text search.
 
+// Query scoring multiplies usize match counts by f32 weights; precision loss
+// beyond the mantissa limit is irrelevant for ranking.
+#![allow(clippy::cast_precision_loss)]
+
 use crate::item::ItemRef;
 use crate::types::CrateName;
 use postcard::{from_io, to_io};
@@ -61,7 +65,10 @@ pub(crate) struct InvertedIndex {
 
 impl InvertedIndex {
     /// Create a new InvertedIndex with the given terms and document IDs
-    pub(super) fn new(terms: HashMap<TermHash, Vec<(usize, f32)>>, ids: Vec<Vec<u32>>) -> Self {
+    pub(super) const fn new(
+        terms: HashMap<TermHash, Vec<(usize, f32)>>,
+        ids: Vec<Vec<u32>>,
+    ) -> Self {
         Self { terms, ids }
     }
 
@@ -105,7 +112,7 @@ impl InvertedIndex {
         // are still meaningful and penalizing them would cause real items to drop out of results.
         let total_tokens = tokens.len() as f32;
         if query.contains(' ') && total_tokens > 1.0 {
-            for (doc_idx, score) in combined_scores.iter_mut() {
+            for (doc_idx, score) in &mut combined_scores {
                 let matched = token_match_counts.get(doc_idx).copied().unwrap_or(0) as f32;
                 let coverage = matched / total_tokens;
                 *score *= coverage * coverage;
@@ -129,7 +136,7 @@ impl InvertedIndex {
     }
 
     /// Get the number of documents in the index
-    pub(crate) fn document_count(&self) -> usize {
+    pub(crate) const fn document_count(&self) -> usize {
         self.ids.len()
     }
 }
@@ -297,9 +304,8 @@ impl TermIndex {
                 if let Ok((terms, _)) = from_io((&mut file, &mut buf)) {
                     tracing::debug!(path = %path.display(), "Using cached index (newer than source)");
                     return Some(terms);
-                } else {
-                    tracing::warn!(path = %path.display(), "Failed to deserialize cached index");
                 }
+                tracing::warn!(path = %path.display(), "Failed to deserialize cached index");
                 None
             })
             .await
@@ -387,7 +393,9 @@ mod tests {
             bucket.sort_by(|(_, a), (_, b)| b.total_cmp(a));
         }
         // IDs: each doc gets a singleton path [doc_idx as u32]
-        let ids: Vec<Vec<u32>> = (0..doc_count).map(|i| vec![i as u32]).collect();
+        let ids: Vec<Vec<u32>> = (0..doc_count)
+            .map(|i| vec![u32::try_from(i).expect("test doc_count fits in u32")])
+            .collect();
         InvertedIndex::new(terms, ids)
     }
 

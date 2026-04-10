@@ -34,7 +34,7 @@ impl<'a> Iterator for MethodIterator<'a> {
                 && let ItemEnum::Impl(impl_block) = current_impl.inner()
                 && self.current_index < impl_block.items.len()
             {
-                let id = &impl_block.items[self.current_index];
+                let id = impl_block.items[self.current_index];
                 self.current_index += 1;
                 if let Some(item) = self.item.get(id) {
                     return Some(item);
@@ -138,7 +138,7 @@ impl<'a, T> IdIterator<'a, T> {
     }
 
     /// Configure whether to include Use items in the iteration
-    pub fn with_include_use(mut self, include_use: bool) -> Self {
+    pub const fn with_include_use(mut self, include_use: bool) -> Self {
         self.include_use = include_use;
         self
     }
@@ -150,7 +150,7 @@ impl<'a, T> Iterator for IdIterator<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         'outer: loop {
             // Process current ID iterator
-            while let Some(id) = self.id_iter.next() {
+            while let Some(&id) = self.id_iter.next() {
                 let Some(item) = self.item.get(id) else {
                     continue;
                 };
@@ -165,11 +165,11 @@ impl<'a, T> Iterator for IdIterator<'a, T> {
                     // 1. Try same-crate lookup by ID
                     let mut source_item = use_item
                         .id
-                        .and_then(|id| item.crate_index().get(item.query(), &id));
+                        .and_then(|id| item.crate_index().get(item.query(), id));
 
                     // 2. If same-crate failed, try cross-crate resolution
                     if source_item.is_none() {
-                        source_item = self.resolve_cross_crate_reexport(use_item, &item);
+                        source_item = Self::resolve_cross_crate_reexport(use_item, &item);
                     }
 
                     // 3. Final fallback: resolve the full path (now with discovery)
@@ -229,7 +229,6 @@ impl<'a, T> IdIterator<'a, T> {
     /// This handles cases like `pub use serde_core::Serialize` in `serde` crate,
     /// where the source path points to a different crate than the current one.
     fn resolve_cross_crate_reexport(
-        &self,
         use_item: &Use,
         parent_item: &ItemRef<'a, Item>,
     ) -> Option<ItemRef<'a, Item>> {
@@ -281,7 +280,7 @@ pub struct UseIterator<'a> {
 }
 
 impl<'a> UseIterator<'a> {
-    pub fn new(use_item: ItemRef<'a, Use>, include_use: bool) -> Self {
+    pub const fn new(use_item: ItemRef<'a, Use>, include_use: bool) -> Self {
         Self {
             use_item: Some(use_item),
             resolved_iter: None,
@@ -299,11 +298,10 @@ impl<'a> Iterator for UseIterator<'a> {
             if let Some(resolved_iter) = &mut self.resolved_iter {
                 if let Some(item) = resolved_iter.next() {
                     return Some(item);
-                } else {
-                    // Exhausted the glob expansion
-                    self.resolved_iter = None;
-                    return None;
                 }
+                // Exhausted the glob expansion
+                self.resolved_iter = None;
+                return None;
             }
 
             // Process the use item
@@ -316,7 +314,7 @@ impl<'a> Iterator for UseIterator<'a> {
             // Resolve the re-export target
             let mut resolved_item = use_ref
                 .id
-                .and_then(|id| use_ref.get(&id))
+                .and_then(|id| use_ref.get(id))
                 .or_else(|| use_ref.query().resolve_path(&use_ref.source, &mut vec![]))?;
 
             // Apply the re-export name
@@ -366,7 +364,7 @@ pub struct ChildrenBuilder<'a> {
 
 impl<'a> ChildrenBuilder<'a> {
     /// Create a new children builder for an item.
-    pub fn new(item: ItemRef<'a, Item>) -> Self {
+    pub const fn new(item: ItemRef<'a, Item>) -> Self {
         Self {
             item,
             include_use: false,
@@ -375,13 +373,13 @@ impl<'a> ChildrenBuilder<'a> {
     }
 
     /// Include Use (re-export) items in the iteration.
-    pub fn include_use(mut self) -> Self {
+    pub const fn include_use(mut self) -> Self {
         self.include_use = true;
         self
     }
 
     /// Filter children to only include items of a specific kind.
-    pub fn only_kind(mut self, kind: ItemKind) -> Self {
+    pub const fn only_kind(mut self, kind: ItemKind) -> Self {
         self.kind_filter = Some(kind);
         self
     }
@@ -435,12 +433,12 @@ impl<'a> ChildIterator<'a> {
             ItemEnum::Enum(enum_item) => {
                 Self::Enum(item.id_iter(&enum_item.variants), item.methods())
             }
-            ItemEnum::Struct(_) => Self::AssociatedMethods(item.methods()),
-            ItemEnum::Union(_) => Self::AssociatedMethods(item.methods()),
+            ItemEnum::Struct(_) | ItemEnum::Union(_) | ItemEnum::Trait(_) => {
+                Self::AssociatedMethods(item.methods())
+            }
             ItemEnum::Use(use_item) => {
                 ChildIterator::Use(UseIterator::new(item.build_ref(use_item), false))
             }
-            ItemEnum::Trait(_) => Self::AssociatedMethods(item.methods()),
             _ => Self::None,
         }
     }
@@ -448,19 +446,14 @@ impl<'a> ChildIterator<'a> {
     /// Configure whether to include Use items in the iteration
     pub fn with_use(mut self) -> Self {
         match &mut self {
-            ChildIterator::AssociatedMethods(_) => {}
-            ChildIterator::Module(id_iter) => {
-                *id_iter = std::mem::replace(id_iter, IdIterator::new(id_iter.item, &[]))
-                    .with_include_use(true);
-            }
-            ChildIterator::Enum(id_iter, _) => {
+            ChildIterator::Module(id_iter) | ChildIterator::Enum(id_iter, _) => {
                 *id_iter = std::mem::replace(id_iter, IdIterator::new(id_iter.item, &[]))
                     .with_include_use(true);
             }
             ChildIterator::Use(use_iter) => {
                 use_iter.include_use = true;
             }
-            ChildIterator::None => {}
+            ChildIterator::AssociatedMethods(_) | ChildIterator::None => {}
         }
         self
     }
@@ -479,7 +472,7 @@ impl<'a> ItemRef<'a, Item> {
     }
 
     /// Get a builder for configuring child item iteration.
-    pub fn children(&self) -> ChildrenBuilder<'a> {
+    pub const fn children(&self) -> ChildrenBuilder<'a> {
         ChildrenBuilder::new(*self)
     }
 }

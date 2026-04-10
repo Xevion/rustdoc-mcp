@@ -83,7 +83,7 @@ impl WorkspaceContext {
         self.crate_info
             .keys()
             .filter(|name| !self.members.iter().any(|m| m.matches(name.as_str())))
-            .map(|s| s.as_str())
+            .map(super::super::types::CrateName::as_str)
     }
 
     /// Get metadata for a specific crate by name.
@@ -95,7 +95,7 @@ impl WorkspaceContext {
     /// Get an iterator over crate info, optionally filtered by workspace member.
     pub fn iter_crates(&self, member_name: Option<&str>) -> impl Iterator<Item = &CrateMetadata> {
         let filter_member = member_name.or_else(|| self.detect_subcrate_context());
-        let member_string = filter_member.map(|s| s.to_string());
+        let member_string = filter_member.map(std::string::ToString::to_string);
 
         self.crate_info.values().filter(move |info| {
             match &member_string {

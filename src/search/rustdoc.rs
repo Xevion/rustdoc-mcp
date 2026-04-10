@@ -37,7 +37,7 @@ pub enum ItemKind {
 }
 
 /// Check if an ItemEnum matches a specific ItemKind.
-pub(crate) fn matches_kind(inner: &ItemEnum, kind: ItemKind) -> bool {
+pub(crate) const fn matches_kind(inner: &ItemEnum, kind: ItemKind) -> bool {
     matches!(
         (inner, kind),
         (ItemEnum::Module(_), ItemKind::Module)
@@ -52,7 +52,7 @@ pub(crate) fn matches_kind(inner: &ItemEnum, kind: ItemKind) -> bool {
 }
 
 /// Convert an ItemEnum to its corresponding rustdoc ItemKind.
-pub(crate) fn item_enum_to_kind(inner: &ItemEnum) -> RustdocItemKind {
+pub(crate) const fn item_enum_to_kind(inner: &ItemEnum) -> RustdocItemKind {
     match inner {
         ItemEnum::Module(_) => RustdocItemKind::Module,
         ItemEnum::ExternCrate { .. } => RustdocItemKind::ExternCrate,
@@ -90,7 +90,7 @@ pub(crate) fn item_enum_to_kind(inner: &ItemEnum) -> RustdocItemKind {
 }
 
 /// Get a string representation of an item's kind.
-pub(crate) fn item_kind_str(inner: &ItemEnum) -> &'static str {
+pub(crate) const fn item_kind_str(inner: &ItemEnum) -> &'static str {
     match inner {
         ItemEnum::Module(_) => "module",
         ItemEnum::Struct(_) => "struct",
@@ -140,7 +140,7 @@ impl CrateIndex {
             .map(|(id, crate_info)| (*id, crate_info.name.clone()))
             .collect();
 
-        Ok(CrateIndex {
+        Ok(Self {
             crate_data,
             index,
             _external_crates: external_crates,
@@ -160,17 +160,17 @@ impl CrateIndex {
     }
 
     /// Get access to the underlying Crate structure
-    pub fn crate_data(&self) -> &Crate {
+    pub const fn crate_data(&self) -> &Crate {
         &self.crate_data
     }
 
     /// Get access to the crate's paths mapping
-    pub fn paths(&self) -> &HashMap<Id, ItemSummary> {
+    pub const fn paths(&self) -> &HashMap<Id, ItemSummary> {
         &self.crate_data.paths
     }
 
-    pub fn get_item(&self, id: &Id) -> Option<&Item> {
-        self.index.get(id)
+    pub fn get_item(&self, id: Id) -> Option<&Item> {
+        self.index.get(&id)
     }
 
     pub fn root_module(&self) -> Option<&Item> {
@@ -178,8 +178,8 @@ impl CrateIndex {
     }
 
     /// Get the root item ID
-    pub fn root(&self) -> &Id {
-        &self.crate_data.root
+    pub const fn root(&self) -> Id {
+        self.crate_data.root
     }
 
     /// Get the crate name
@@ -190,15 +190,15 @@ impl CrateIndex {
     }
 
     /// Get the path to an item by its ID
-    pub fn path(&self, id: &Id) -> Option<crate::item::ItemPath<'_>> {
-        self.crate_data.paths.get(id).map(|summary| summary.into())
+    pub fn path(&self, id: Id) -> Option<crate::item::ItemPath<'_>> {
+        self.crate_data.paths.get(&id).map(std::convert::Into::into)
     }
 
     /// Get an ItemRef for an item by ID
     pub fn get<'a>(
         &'a self,
         query: &'a crate::search::QueryContext,
-        id: &Id,
+        id: Id,
     ) -> Option<crate::item::ItemRef<'a, Item>> {
         use crate::item::ItemRef;
         self.get_item(id)
@@ -218,7 +218,7 @@ impl CrateIndex {
         let mut paths = Vec::new();
 
         for summary in self.crate_data.paths.values() {
-            if summary.path.last().map(|s| s.as_str()) == Some(type_name) {
+            if summary.path.last().map(std::string::String::as_str) == Some(type_name) {
                 paths.push(summary.path.join("::"));
             }
         }
@@ -234,14 +234,14 @@ impl CrateIndex {
     }
 
     /// Returns all impl blocks for the given type ID.
-    pub fn get_impls(&self, type_id: &Id) -> Vec<&Item> {
+    pub fn get_impls(&self, type_id: Id) -> Vec<&Item> {
         use rustdoc_types::Type;
         self.index
             .values()
             .filter(|item| {
                 if let ItemEnum::Impl(impl_item) = &item.inner {
                     match &impl_item.for_ {
-                        Type::ResolvedPath(path) => path.id == *type_id,
+                        Type::ResolvedPath(path) => path.id == type_id,
                         _ => false,
                     }
                 } else {
@@ -260,10 +260,9 @@ impl CrateIndex {
             if let ItemEnum::Impl(impl_item) = &item.inner {
                 let for_type_matches = match &impl_item.for_ {
                     Type::ResolvedPath(path) => self
-                        .get_item(&path.id)
+                        .get_item(path.id)
                         .and_then(|item| item.name.as_ref())
-                        .map(|name| name.contains(type_name))
-                        .unwrap_or(false),
+                        .is_some_and(|name| name.contains(type_name)),
                     _ => false,
                 };
 
@@ -286,7 +285,7 @@ impl CrateIndex {
         impls
     }
 
-    pub fn get_docs(&self, id: &Id) -> Option<&str> {
+    pub fn get_docs(&self, id: Id) -> Option<&str> {
         self.get_item(id)?.docs.as_deref()
     }
 

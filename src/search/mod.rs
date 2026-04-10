@@ -19,4 +19,4 @@ pub use rustdoc::ItemKind;
 pub(crate) use index::{DetailedSearchResult, TermIndex};
 pub(crate) use query::{parse_item_path, resolve_crate_from_path};
 pub(crate) use rustdoc::{CrateIndex, item_enum_to_kind, item_kind_str, matches_kind};
-pub(crate) use scoring::path_canonicality_score;
+pub(crate) use scoring::{path_canonicality_score, score_to_percent};

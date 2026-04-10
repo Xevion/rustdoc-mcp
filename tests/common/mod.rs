@@ -188,7 +188,7 @@ impl Default for TempWorkspace {
 #[allow(dead_code)] // Fields used across different integration test crates
 pub(crate) struct IsolatedWorkspace {
     workspace: TempWorkspace,
-    pub state: Arc<DocState>,
+    pub(crate) state: Arc<DocState>,
 }
 
 #[allow(dead_code)] // Methods used across different integration test crates
@@ -466,7 +466,7 @@ pub(crate) async fn warm_cache(state: &Arc<DocState>, crates: &[&str]) {
             SearchRequest {
                 query: "_warmup_".to_string(),
                 crate_name: crate_name.to_string(),
-                limit: Some(1),
+                limit: 1,
             },
         )
         .await;

@@ -15,7 +15,7 @@
 //! brittleness of string-containment tests on MCP output.
 
 use crate::{
-    search::{QueryContext, TermIndex},
+    search::{QueryContext, TermIndex, score_to_percent},
     stdlib::StdlibDocs,
     worker::DocState,
 };
@@ -31,11 +31,11 @@ pub struct SearchRequest {
     pub crate_name: String,
     /// Maximum number of results to return (default: 10)
     #[serde(default = "default_limit")]
-    pub limit: Option<usize>,
+    pub limit: usize,
 }
 
-fn default_limit() -> Option<usize> {
-    Some(10)
+const fn default_limit() -> usize {
+    10
 }
 
 /// Structured result of a search operation, independent of any string rendering.
@@ -115,38 +115,35 @@ pub async fn handle_search_structured(
     }
 
     // Workspace-based search.
-    let workspace_ctx = match state.workspace().await {
-        Some(ctx) => ctx,
-        None => {
-            if let Some(stdlib) = state.stdlib() {
-                if StdlibDocs::is_stdlib_crate(&request.crate_name) {
-                    return stdlib_search_structured(stdlib, &request).await;
-                }
-
-                return Err(format!(
-                    "Crate '{}' not found. No workspace configured.\n\n\
-                     Available for search without workspace:\n\
-                     • Standard library: {}\n\n\
-                     Use set_workspace to configure a Rust project.",
-                    request.crate_name,
-                    stdlib.available_crates().join(", ")
-                ));
+    let Some(workspace_ctx) = state.workspace().await else {
+        if let Some(stdlib) = state.stdlib() {
+            if StdlibDocs::is_stdlib_crate(&request.crate_name) {
+                return stdlib_search_structured(stdlib, &request).await;
             }
 
-            tracing::warn!("Search failed: no workspace and no stdlib available");
-            return Err(
-                "No workspace configured and standard library docs not available.\n\n\
-                 To configure a workspace:\n\
-                 • Use set_workspace with a path to a Rust project\n\n\
-                 To enable standard library docs:\n\
-                 • Run: rustup component add rust-docs-json --toolchain nightly"
-                    .to_string(),
-            );
+            return Err(format!(
+                "Crate '{}' not found. No workspace configured.\n\n\
+                 Available for search without workspace:\n\
+                 • Standard library: {}\n\n\
+                 Use set_workspace to configure a Rust project.",
+                request.crate_name,
+                stdlib.available_crates().join(", ")
+            ));
         }
+
+        tracing::warn!("Search failed: no workspace and no stdlib available");
+        return Err(
+            "No workspace configured and standard library docs not available.\n\n\
+             To configure a workspace:\n\
+             • Use set_workspace with a path to a Rust project\n\n\
+             To enable standard library docs:\n\
+             • Run: rustup component add rust-docs-json --toolchain nightly"
+                .to_string(),
+        );
     };
 
     let query_ctx = QueryContext::new(Arc::new(workspace_ctx));
-    run_search(&query_ctx, &request, false)
+    Ok(run_search(&query_ctx, &request, false))
 }
 
 /// Structured stdlib search. Shared between the direct-route and the
@@ -156,7 +153,7 @@ async fn stdlib_search_structured(
     request: &SearchRequest,
 ) -> Result<StructuredSearchResult, String> {
     let query_ctx = stdlib.build_query_context(&request.crate_name).await?;
-    run_search(&query_ctx, request, true)
+    Ok(run_search(&query_ctx, request, true))
 }
 
 /// Core search routine: resolves the crate, runs the query, and builds a
@@ -165,7 +162,7 @@ fn run_search(
     query_ctx: &QueryContext,
     request: &SearchRequest,
     is_stdlib: bool,
-) -> Result<StructuredSearchResult, String> {
+) -> StructuredSearchResult {
     let index = match TermIndex::load_or_build(query_ctx, &request.crate_name) {
         Ok(index) => index,
         Err(mut suggestions) => {
@@ -185,15 +182,14 @@ fn run_search(
                 })
                 .collect();
 
-            return Ok(StructuredSearchResult::CrateNotFound {
+            return StructuredSearchResult::CrateNotFound {
                 attempted: request.crate_name.clone(),
                 suggestions,
-            });
+            };
         }
     };
 
-    let limit = request.limit.unwrap_or(10);
-    let matches = index.search(&request.query, limit);
+    let matches = index.search(&request.query, request.limit);
 
     tracing::debug!(
         query = %request.query,
@@ -203,17 +199,17 @@ fn run_search(
     );
 
     if matches.is_empty() {
-        return Ok(StructuredSearchResult::Empty {
+        return StructuredSearchResult::Empty {
             crate_name: request.crate_name.clone(),
             query: request.query.clone(),
-        });
+        };
     }
 
-    let max_score = matches.first().map(|r| r.rank).unwrap_or(1.0);
+    let max_score = matches.first().map_or(1.0, |r| r.rank);
     let hits: Vec<StructuredSearchHit> = matches
         .iter()
         .map(|m| {
-            let relevance = ((m.rank / max_score) * 100.0).round() as u32;
+            let relevance = score_to_percent(m.rank / max_score);
             match query_ctx.get_item_from_id_path(m.item.crate_name.as_str(), &m.item.item_path) {
                 Some((item, path_segments)) => {
                     let full_path = path_segments.join("::");
@@ -240,12 +236,12 @@ fn run_search(
         })
         .collect();
 
-    Ok(StructuredSearchResult::Hits {
+    StructuredSearchResult::Hits {
         crate_name: request.crate_name.clone(),
         query: request.query.clone(),
         is_stdlib,
         hits,
-    })
+    }
 }
 
 /// Render a [`StructuredSearchResult`] into the human-readable MCP output format.

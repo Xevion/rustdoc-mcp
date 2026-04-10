@@ -27,19 +27,23 @@ pub enum Hash {
 impl Hash {
     /// Create a SHA-256 hash from a byte array
     pub const fn sha256(bytes: [u8; 32]) -> Self {
-        Hash::Sha256(bytes)
+        Self::Sha256(bytes)
     }
 
     /// Create a U64 hash from a u64 value
     pub const fn u64(value: u64) -> Self {
-        Hash::U64(value)
+        Self::U64(value)
     }
 
     /// Returns the hash as a lowercase hexadecimal string
     pub fn as_hex(&self) -> String {
         match self {
-            Hash::Sha256(bytes) => bytes.iter().map(|b| format!("{:02x}", b)).collect(),
-            Hash::U64(value) => format!("{:016x}", value),
+            Self::Sha256(bytes) => bytes.iter().fold(String::with_capacity(64), |mut acc, b| {
+                use std::fmt::Write as _;
+                let _ = write!(acc, "{:02x}", b);
+                acc
+            }),
+            Self::U64(value) => format!("{:016x}", value),
         }
     }
 }
@@ -64,12 +68,12 @@ impl FromStr for Hash {
                 bytes[i] =
                     u8::from_str_radix(hex_str, 16).map_err(|_| ParseHashError::InvalidHex)?;
             }
-            Ok(Hash::Sha256(bytes))
+            Ok(Self::Sha256(bytes))
         }
         // U64 hashes are 16 hex characters (8 bytes * 2)
         else if s.len() == 16 {
             let value = u64::from_str_radix(s, 16).map_err(|_| ParseHashError::InvalidHex)?;
-            Ok(Hash::U64(value))
+            Ok(Self::U64(value))
         } else {
             Err(ParseHashError::InvalidLength { length: s.len() })
         }
@@ -232,7 +236,7 @@ async fn hash_directory(dir: &Path) -> Result<u64> {
         // Walk directory in sorted order for deterministic hashing
         let mut entries: Vec<_> = WalkBuilder::new(&dir)
             .build()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| {
                 e.path()
                     .extension()
@@ -294,7 +298,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case("123456789abcdef0", 0x123456789abcdef0)]
+    #[case("123456789abcdef0", 0x1234_5678_9abc_def0)]
     #[case("0000000000000000", 0)]
     #[case("ffffffffffffffff", u64::MAX)]
     #[case("00000000000000ff", 255)]
@@ -339,7 +343,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Hash::U64(0x123456789abcdef0), "\"123456789abcdef0\"")]
+    #[case(Hash::U64(0x1234_5678_9abc_def0), "\"123456789abcdef0\"")]
     #[case(Hash::U64(0), "\"0000000000000000\"")]
     #[case(Hash::U64(u64::MAX), "\"ffffffffffffffff\"")]
     #[case(Hash::U64(255), "\"00000000000000ff\"")]

@@ -235,7 +235,7 @@ async fn inspect_local_trait(isolated_workspace: IsolatedWorkspace) {
 ///
 /// Regression guard for the CamelCase partial-token TF-IDF hazard the
 /// `handle_inspect_item_structured` disambiguation logic guards against.
-/// "ServiceContext" tokenizes into ["service", "context"], and "context"
+/// `ServiceContext` tokenizes into `[service, context]`, and `context`
 /// partially matches QueryContext, WorkspaceContext, and several other
 /// types in the workspace. The exact-name filter must prefer the one
 /// result whose lowercased name equals "servicecontext" over all the

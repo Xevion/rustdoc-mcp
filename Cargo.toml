@@ -54,6 +54,9 @@ unreachable_pub = "warn"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
 # Too noisy for a documentation-heavy crate
 doc_markdown = "allow"
 missing_errors_doc = "allow"
@@ -64,3 +67,13 @@ uninlined_format_args = "allow"
 module_name_repetitions = "allow"
 # Not useful for this crate
 must_use_candidate = "allow"
+
+# nursery: often suggests less-readable Option combinators
+option_if_let_else = "allow"
+# nursery: we prefer explicit `pub(crate)` over bare `pub` for internal APIs
+redundant_pub_crate = "allow"
+
+# cargo: transitive deps (embedded-io, getrandom) pull in mismatched versions
+multiple_crate_versions = "allow"
+# cargo: not publishing to crates.io; binary distribution only
+cargo_common_metadata = "allow"

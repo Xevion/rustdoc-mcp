@@ -130,10 +130,10 @@ async fn generate_docs_workspace_member(
         let lock_path = workspace_root.join("Cargo.lock");
         if lock_path.exists() {
             if let Ok(crates) = parse_cargo_lock(&lock_path).await {
-                crates
-                    .get(crate_name.normalized())
-                    .map(|pkg| pkg.name.as_str().to_string())
-                    .unwrap_or_else(|| crate_name.as_str().to_string())
+                crates.get(crate_name.normalized()).map_or_else(
+                    || crate_name.as_str().to_string(),
+                    |pkg| pkg.name.as_str().to_string(),
+                )
             } else {
                 crate_name.as_str().to_string()
             }

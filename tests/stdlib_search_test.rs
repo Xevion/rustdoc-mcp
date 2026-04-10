@@ -86,7 +86,7 @@ async fn search_hashmap_in_std() {
         SearchRequest {
             query: "HashMap".to_string(),
             crate_name: "std".to_string(),
-            limit: Some(20),
+            limit: 20,
         },
     )
     .await
@@ -190,7 +190,7 @@ async fn warm_cache_writes_to_isolated_dir() {
     let make_request = || SearchRequest {
         query: "BTreeMap".to_string(),
         crate_name: "std".to_string(),
-        limit: Some(5),
+        limit: 5,
     };
 
     let (builds_before, _) = index_metrics::snapshot();

@@ -47,7 +47,7 @@ pub async fn handle_inspect_crate(
     if let Some(workspace_ctx) = state.workspace().await {
         tracing::debug!("Using workspace context");
         return match request.crate_name {
-            None => render_summary_mode(&workspace_ctx, request.detail_level).await,
+            None => render_summary_mode(&workspace_ctx, request.detail_level),
             Some(crate_name) => {
                 // Check if it's a stdlib crate that we should handle specially
                 if StdlibDocs::is_stdlib_crate(&crate_name)
@@ -78,7 +78,7 @@ pub async fn handle_inspect_crate(
     })?;
 
     match request.crate_name {
-        None => render_stdlib_summary_mode(stdlib, request.detail_level).await,
+        None => render_stdlib_summary_mode(stdlib, request.detail_level),
         Some(crate_name) => {
             if !StdlibDocs::is_stdlib_crate(&crate_name) {
                 return Err(anyhow!(
@@ -97,7 +97,7 @@ pub async fn handle_inspect_crate(
 }
 
 /// Summary mode: list all crates with descriptions and stats
-async fn render_summary_mode(
+fn render_summary_mode(
     workspace_ctx: &crate::workspace::WorkspaceContext,
     detail_level: DetailLevel,
 ) -> Result<String> {
@@ -160,7 +160,11 @@ async fn render_summary_mode(
             write!(output, "  • {} v{}", name, version)?;
 
             if detail_level != DetailLevel::Low && !meta.used_by.is_empty() {
-                let used_by: Vec<_> = meta.used_by.iter().map(|n| n.as_str()).collect();
+                let used_by: Vec<_> = meta
+                    .used_by
+                    .iter()
+                    .map(super::super::types::CrateName::as_str)
+                    .collect();
                 write!(output, " (used by {})", used_by.join(", "))?;
             }
             writeln!(output)?;
@@ -198,6 +202,7 @@ async fn render_summary_mode(
 }
 
 /// Detail mode: deep dive into a specific crate
+#[allow(clippy::too_many_lines)]
 async fn render_detail_mode(
     crate_name: &str,
     workspace_ctx: &crate::workspace::WorkspaceContext,
@@ -222,7 +227,11 @@ async fn render_detail_mode(
 
     // Usage information
     if !meta.used_by.is_empty() {
-        let used_by: Vec<_> = meta.used_by.iter().map(|n| n.as_str()).collect();
+        let used_by: Vec<_> = meta
+            .used_by
+            .iter()
+            .map(super::super::types::CrateName::as_str)
+            .collect();
         writeln!(output, "\nUsed by: {}", used_by.join(", "))?;
     }
 
@@ -275,7 +284,7 @@ async fn render_detail_mode(
                 let mut module_names: Vec<_> = module
                     .items
                     .iter()
-                    .filter_map(|id| {
+                    .filter_map(|&id| {
                         let item = crate_index.get_item(id)?;
                         if matches!(item.inner, ItemEnum::Module(_)) {
                             item.name.as_ref()
@@ -409,7 +418,7 @@ fn truncate_description(desc: &str, max_len: usize) -> String {
 }
 
 /// Summary mode for stdlib-only (no workspace configured)
-async fn render_stdlib_summary_mode(
+fn render_stdlib_summary_mode(
     stdlib: &std::sync::Arc<StdlibDocs>,
     _detail_level: DetailLevel,
 ) -> Result<String> {
@@ -487,7 +496,7 @@ async fn render_stdlib_detail_mode(
         let mut module_names: Vec<_> = module
             .items
             .iter()
-            .filter_map(|id| {
+            .filter_map(|&id| {
                 let item = crate_index.get_item(id)?;
                 if matches!(item.inner, ItemEnum::Module(_)) {
                     item.name.as_ref()

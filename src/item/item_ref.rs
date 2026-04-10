@@ -19,9 +19,9 @@ pub struct ItemRef<'a, T> {
 
 // Manually implement Copy and Clone without requiring T: Copy,
 // since ItemRef only contains references which are always Copy.
-impl<'a, T> Copy for ItemRef<'a, T> {}
+impl<T> Copy for ItemRef<'_, T> {}
 
-impl<'a, T> Clone for ItemRef<'a, T> {
+impl<T> Clone for ItemRef<'_, T> {
     fn clone(&self) -> Self {
         *self
     }
@@ -37,7 +37,7 @@ pub struct ItemRefBuilder<'a, T> {
 
 impl<'a, T> ItemRefBuilder<'a, T> {
     /// Build the ItemRef instance.
-    pub fn build(self) -> ItemRef<'a, T> {
+    pub const fn build(self) -> ItemRef<'a, T> {
         ItemRef {
             query: self.query,
             crate_index: self.crate_index,
@@ -59,7 +59,7 @@ impl<'a, T> From<ItemRef<'a, T>> for &'a CrateIndex {
     }
 }
 
-impl<'a, T> Deref for ItemRef<'a, T> {
+impl<T> Deref for ItemRef<'_, T> {
     type Target = T;
 
     #[inline]
@@ -77,13 +77,13 @@ impl<'a> ItemRef<'a, Item> {
 
     /// Get the inner ItemEnum of this item.
     #[inline]
-    pub fn inner(&self) -> &'a ItemEnum {
+    pub const fn inner(&self) -> &'a ItemEnum {
         &self.item.inner
     }
 
     /// Get the ItemKind for this item.
     #[inline]
-    pub fn kind(&self) -> ItemKind {
+    pub const fn kind(&self) -> ItemKind {
         item_enum_to_kind(&self.item.inner)
     }
 
@@ -95,13 +95,13 @@ impl<'a> ItemRef<'a, Item> {
 
     /// Check if this item is public.
     #[inline]
-    pub fn is_public(&self) -> bool {
+    pub const fn is_public(&self) -> bool {
         matches!(self.item.visibility, rustdoc_types::Visibility::Public)
     }
 
     /// Get the path to this item if available.
     pub fn path(&self) -> Option<ItemPath<'a>> {
-        self.crate_index.path(&self.id)
+        self.crate_index.path(self.id)
     }
 
     /// Get the fully qualified path as a String (e.g., "std::vec::Vec").
@@ -109,7 +109,7 @@ impl<'a> ItemRef<'a, Item> {
         self.path().map(|p| p.to_string())
     }
 
-    /// Get path segments as a slice (e.g., ["std", "vec", "Vec"]).
+    /// Get path segments as a slice (e.g., `["std", "vec", "Vec"]`).
     pub fn path_segments(&self) -> Option<&'a [String]> {
         self.crate_index
             .paths()
@@ -120,12 +120,11 @@ impl<'a> ItemRef<'a, Item> {
     /// Check if this item is at the crate root (has no parent module).
     pub fn is_root(&self) -> bool {
         self.path_segments()
-            .map(|segments| segments.len() <= 1)
-            .unwrap_or(true)
+            .is_none_or(|segments| segments.len() <= 1)
     }
 
     /// Navigate to the parent module, if this item has one.
-    pub fn parent(&self) -> Option<ItemRef<'a, Item>> {
+    pub fn parent(&self) -> Option<Self> {
         let segments = self.path_segments()?;
         if segments.len() <= 1 {
             return None;
@@ -137,7 +136,7 @@ impl<'a> ItemRef<'a, Item> {
             .paths()
             .iter()
             .find(|(_, summary)| summary.path == parent_path)
-            .and_then(|(id, _)| self.get(id))
+            .and_then(|(id, _)| self.get(*id))
     }
 
     /// Build a new ItemRef for a different item type using the same context.
@@ -147,11 +146,11 @@ impl<'a> ItemRef<'a, Item> {
 
     /// If this is a re-export (Use item), resolve to the original item.
     /// Returns None if this is not a re-export or if resolution fails.
-    pub fn resolve_use(&self) -> Option<ItemRef<'a, Item>> {
+    pub fn resolve_use(&self) -> Option<Self> {
         if let ItemEnum::Use(use_item) = self.inner() {
             // Try to resolve using the ID first
             if let Some(id) = use_item.id
-                && let Some(resolved) = self.get(&id)
+                && let Some(resolved) = self.get(id)
             {
                 return Some(resolved);
             }
@@ -163,7 +162,7 @@ impl<'a> ItemRef<'a, Item> {
     }
 }
 
-impl<'a, T: Debug> Debug for ItemRef<'a, T> {
+impl<T: Debug> Debug for ItemRef<'_, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ItemRef")
             .field("crate_index", &"<CrateIndex>")
@@ -189,25 +188,25 @@ impl<'a, T> ItemRef<'a, T> {
 
     /// Set a custom name on this ItemRef (for re-exports).
     /// This mutates the ItemRef in place.
-    pub fn set_name(&mut self, name: &'a str) {
+    pub const fn set_name(&mut self, name: &'a str) {
         self.override_name = Some(name);
     }
 
     /// Get access to the underlying CrateIndex.
     #[inline]
-    pub fn crate_index(&self) -> &'a CrateIndex {
+    pub const fn crate_index(&self) -> &'a CrateIndex {
         self.crate_index
     }
 
     /// Get access to the QueryContext.
     #[inline]
-    pub fn query(&self) -> &'a QueryContext {
+    pub const fn query(&self) -> &'a QueryContext {
         self.query
     }
 
     /// Resolve an Id to an ItemRef.
     #[inline]
-    pub fn get(&self, id: &Id) -> Option<ItemRef<'a, Item>> {
+    pub fn get(&self, id: Id) -> Option<ItemRef<'a, Item>> {
         self.crate_index.get(self.query, id)
     }
 }

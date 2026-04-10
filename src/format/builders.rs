@@ -22,12 +22,12 @@ pub struct TypeFormatter<'a> {
 
 impl<'a> TypeFormatter<'a> {
     /// Create a new formatter for the given crate index.
-    pub fn new(index: &'a CrateIndex) -> Self {
+    pub const fn new(index: &'a CrateIndex) -> Self {
         Self { index }
     }
 
     /// Get the underlying crate index.
-    pub fn index(&self) -> &'a CrateIndex {
+    pub const fn index(&self) -> &'a CrateIndex {
         self.index
     }
 
@@ -291,7 +291,7 @@ impl<'a> TypeFormatter<'a> {
         };
 
         let name = if Self::is_std_path(&summary.path) {
-            summary.path.last().map(String::as_str).unwrap_or("?")
+            summary.path.last().map_or("?", String::as_str)
         } else {
             // For external types, return a qualified name to avoid ambiguity
             match (summary.path.first(), summary.path.last()) {
@@ -303,7 +303,7 @@ impl<'a> TypeFormatter<'a> {
                         None => w.write_str(&qualified),
                     };
                 }
-                _ => summary.path.last().map(String::as_str).unwrap_or("?"),
+                _ => summary.path.last().map_or("?", String::as_str),
             }
         };
 

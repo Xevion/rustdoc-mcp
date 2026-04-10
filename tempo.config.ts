@@ -9,7 +9,7 @@ export default defineConfig({
       aliases: ["s", "srv"],
       commands: {
         ...serverPreset.commands,
-        lint: "cargo clippy --workspace --all-targets",
+        lint: "cargo clippy --workspace --all-targets -- -D warnings",
         "dep-check": {
           cmd: "cargo machete --with-metadata",
         },

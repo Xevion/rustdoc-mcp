@@ -9,7 +9,7 @@ use crate::worker::DocState;
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::*,
+    model::{JsonObject, ServerCapabilities, ServerInfo},
     schemars::{self, JsonSchema, generate::SchemaSettings},
     tool, tool_handler, tool_router,
 };
@@ -36,7 +36,7 @@ impl std::fmt::Debug for ItemServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ItemServer")
             .field("state", &self.state)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -51,7 +51,7 @@ impl ItemServer {
     }
 
     /// Get a reference to the shared DocState.
-    pub fn doc_state(&self) -> &Arc<DocState> {
+    pub const fn doc_state(&self) -> &Arc<DocState> {
         &self.state
     }
 
@@ -121,9 +121,7 @@ impl ItemServer {
         &self,
         Parameters(request): Parameters<InspectItemRequest>,
     ) -> std::result::Result<String, String> {
-        handle_inspect_item(&self.state, request)
-            .await
-            .map_err(|e| e.to_string())
+        handle_inspect_item(&self.state, request).await
     }
 
     #[tool(
@@ -134,9 +132,7 @@ impl ItemServer {
         &self,
         Parameters(request): Parameters<SearchRequest>,
     ) -> std::result::Result<String, String> {
-        handle_search(&self.state, request)
-            .await
-            .map_err(|e| e.to_string())
+        handle_search(&self.state, request).await
     }
 }
 

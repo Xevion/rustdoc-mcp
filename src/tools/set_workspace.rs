@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 /// Returns a tuple of (canonical_path, workspace_context, changed) where
 /// `changed` indicates whether the workspace was actually changed.
 #[tracing::instrument(skip_all, fields(path = %path))]
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn handle_set_workspace(
     path: String,
     current_workspace: Option<&Path>,
@@ -59,7 +60,10 @@ pub(crate) async fn handle_set_workspace(
                     })
                 })?
                 .to_path_buf(),
-            name if name.ends_with(".rs") => {
+            name if std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs")) =>
+            {
                 return Err(ConfigError::InvalidFileType {
                     path: canonical_path,
                     file_type: "Rust source file".to_string(),
@@ -93,9 +97,7 @@ pub(crate) async fn handle_set_workspace(
     );
 
     // Check if workspace has changed
-    let workspace_changed = current_workspace
-        .map(|current| current != workspace_root.as_path())
-        .unwrap_or(true);
+    let workspace_changed = current_workspace != Some(workspace_root.as_path());
 
     // Locate the Cargo.toml in the workspace root
     let cargo_toml = workspace_root.join("Cargo.toml");
@@ -147,6 +149,8 @@ pub(crate) fn format_response(
     old_workspace: Option<&Path>,
     changed: bool,
 ) -> String {
+    use std::fmt::Write as _;
+
     let header = if !changed {
         format!("Workspace already set to: `{}`\n\n", path.display())
     } else if let Some(old) = old_workspace {
@@ -162,12 +166,9 @@ pub(crate) fn format_response(
     let mut response = header;
 
     if !metadata.members.is_empty() {
-        response.push_str(&format!(
-            "Workspace members ({}):\n",
-            metadata.members.len()
-        ));
+        let _ = writeln!(response, "Workspace members ({}):", metadata.members.len());
         for member in &metadata.members {
-            response.push_str(&format!("  - {}\n", member));
+            let _ = writeln!(response, "  - {}", member);
         }
         response.push('\n');
     }
@@ -179,7 +180,7 @@ pub(crate) fn format_response(
         .count();
 
     if dep_count > 0 {
-        response.push_str(&format!("Dependencies ({dep_count}):\n"));
+        let _ = writeln!(response, "Dependencies ({dep_count}):");
 
         let mut dep_names: Vec<_> = metadata
             .crate_info
@@ -191,10 +192,10 @@ pub(crate) fn format_response(
 
         for (name, info) in dep_names.iter().take(10) {
             let version = info.version.as_deref().unwrap_or("unknown");
-            response.push_str(&format!("  - {name} v{version}\n"));
+            let _ = writeln!(response, "  - {name} v{version}");
         }
         if dep_count > 10 {
-            response.push_str(&format!("  ... and {} more\n", dep_count - 10));
+            let _ = writeln!(response, "  ... and {} more", dep_count - 10);
         }
     }
 
@@ -303,5 +304,5 @@ fn get_rustc_version() -> Option<String> {
     version_output
         .split_whitespace()
         .nth(1)
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
 }

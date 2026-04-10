@@ -1,5 +1,10 @@
 //! Text tokenization and stemming utilities for search indexing.
 
+// TF-IDF scoring performs usize→f32 conversions for counts and lengths.
+// Precision loss for counts that fit in a 23-bit mantissa is acceptable
+// for relevance ranking.
+#![allow(clippy::cast_precision_loss)]
+
 use crate::item::ItemRef;
 use ahash::{AHashMap, AHasher};
 use rust_stemmers::{Algorithm, Stemmer};
@@ -83,15 +88,17 @@ impl TermBuilder {
     /// Uses formula: TF-IDF = (1 + ln(tf_normalized)) * ln(total_docs / doc_freq),
     /// where tf_normalized = tf / doc_length for length normalization.
     pub(crate) fn finalize(self) -> InvertedIndex {
+        type GroupedDocs = HashMap<TermHash, Vec<(DocId, f32)>>;
+
         let start = std::time::Instant::now();
         let total_docs = self.shortest_paths.len() as f32;
 
         // Calculate average document length for normalization
         let total_length: usize = self.doc_lengths.values().sum();
-        let avg_doc_length = if !self.doc_lengths.is_empty() {
-            total_length as f32 / self.doc_lengths.len() as f32
-        } else {
+        let avg_doc_length = if self.doc_lengths.is_empty() {
             1.0
+        } else {
+            total_length as f32 / self.doc_lengths.len() as f32
         };
 
         // Sort shortest_paths by doc_id for deterministic output
@@ -109,7 +116,6 @@ impl TermBuilder {
         }
 
         // Group flat term_docs by term_hash
-        type GroupedDocs = HashMap<TermHash, Vec<(DocId, f32)>>;
         let mut grouped: GroupedDocs = HashMap::new();
         let total_term_doc_pairs = self.term_docs.len(); // Capture before move
         for ((term_hash, doc_id), tf_score) in self.term_docs {
@@ -171,7 +177,7 @@ impl TermBuilder {
         }
 
         // Create document ID (crate_id, item_id)
-        let crate_id = item.crate_index().root().0 as u64;
+        let crate_id = u64::from(item.crate_index().root().0);
         let doc_id = (crate_id, id_num);
 
         // Track shortest path to this item
@@ -230,7 +236,7 @@ impl TermBuilder {
         }
 
         let id_num = use_ref.id.0;
-        let crate_id = use_ref.crate_index().root().0 as u64;
+        let crate_id = u64::from(use_ref.crate_index().root().0);
         let doc_id = (crate_id, id_num);
 
         // Create path including this re-export
@@ -248,7 +254,7 @@ impl TermBuilder {
         // Try to resolve the target to get its documentation
         let target = use_item
             .id
-            .and_then(|id| use_ref.get(&id))
+            .and_then(|id| use_ref.get(id))
             .or_else(|| use_ref.query().resolve_path(&use_item.source, &mut vec![]));
 
         if let Some(target_item) = target {
@@ -263,9 +269,9 @@ impl TermBuilder {
 /// Tokenizes text into searchable terms with stemming and case-aware splitting.
 ///
 /// This function implements a state machine that splits text on multiple boundaries:
-/// - **CamelCase**: "HttpServer" → ["Http", "Server", "HttpServer"]
-/// - **snake_case**: "parse_json" → ["parse", "json"]
-/// - **hyphen-case**: "multi-line" → ["multi", "line"]
+/// - **CamelCase**: `HttpServer` → `[Http, Server, HttpServer]`
+/// - **snake_case**: `parse_json` → `[parse, json]`
+/// - **hyphen-case**: `multi-line` → `[multi, line]`
 ///
 /// The state machine maintains two pointers:
 /// - `word_start`: Start of the complete word (e.g., "HttpServer")
@@ -359,8 +365,8 @@ pub(crate) fn index_token(token: &str, tokens: &mut Vec<String>, stemmer: &Stemm
         return;
     }
 
-    let stemmed = stemmer.stem(&lowercase);
-    tokens.push(stemmed.into_owned());
+    let stem = stemmer.stem(&lowercase);
+    tokens.push(stem.into_owned());
 }
 
 /// Hashes a term for fast lookup (case-insensitive).
@@ -395,7 +401,10 @@ mod tests {
     fn test_extract_tokens_exact(#[case] input: &str, #[case] expected: Vec<&str>) {
         let stemmer = Stemmer::create(Algorithm::English);
         let tokens = tokenize_and_stem(input, &stemmer);
-        let expected_owned: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        let expected_owned: Vec<String> = expected
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         check!(tokens == expected_owned);
     }
 
@@ -407,7 +416,10 @@ mod tests {
     fn test_short_rust_types_indexed(#[case] input: &str, #[case] expected: Vec<&str>) {
         let stemmer = Stemmer::create(Algorithm::English);
         let tokens = tokenize_and_stem(input, &stemmer);
-        let expected_owned: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        let expected_owned: Vec<String> = expected
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         check!(tokens == expected_owned);
     }
 
