@@ -54,6 +54,17 @@ pub mod metrics {
 /// Term hash for fast lookup
 type TermHash = u64;
 
+/// Smallest multiplier a partial multi-word match can be scaled by.
+///
+/// The coverage factor interpolates from this floor (no query terms matched) up
+/// to `1.0` (every term matched), so a document that matches a subset of a
+/// multi-word query is always demoted relative to a full match but never driven
+/// toward zero. Without the floor, a bare `(matched / total)^2` factor scales as
+/// `1/N^2` in the query length: one term of a four-word query keeps 6% of its
+/// score, which buries every partial match below the result limit even when no
+/// document matches the query in full.
+const COVERAGE_FLOOR: f32 = 0.2;
+
 /// A searchable term index with TF-IDF scoring.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct InvertedIndex {
@@ -78,6 +89,11 @@ impl InvertedIndex {
     /// The query is tokenized and stemmed just like indexed terms, so:
     /// - "BackgroundWorker" matches items with "background", "worker", or "backgroundwork"
     /// - CamelCase, snake_case, and hyphen-case are all handled
+    ///
+    /// Space-separated queries additionally scale each document by a coverage
+    /// factor derived from how many of the query's terms it matched, bounded
+    /// below by [`COVERAGE_FLOOR`] so partial matches rank below full ones
+    /// without disappearing.
     pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<(Vec<u32>, f32)> {
         let stemmer = Stemmer::create(Algorithm::English);
         let tokens = tokenize_and_stem(query, &stemmer);
@@ -101,21 +117,22 @@ impl InvertedIndex {
             }
         }
 
-        // Apply a quadratic coverage penalty only for multi-word (space-separated) queries.
-        // When the user types "cache invalidation", items that only match "invalid" (not
-        // "cache") should rank below items matching both words. The penalty is (matched/total)^2,
-        // so a document matching 1 of 2 words gets a 0.25× multiplier.
-        //
-        // We do NOT apply this penalty for single-identifier queries like "TypeFormatter" or
-        // path queries like "serde::Serialize" — those produce multiple tokens via CamelCase
-        // splitting, but every token comes from the same user-supplied name, so partial matches
-        // are still meaningful and penalizing them would cause real items to drop out of results.
+        // Only space-separated queries carry a coverage signal. Single identifiers like
+        // "TypeFormatter" also tokenize into several terms, but they name one thing.
         let total_tokens = tokens.len() as f32;
         if query.contains(' ') && total_tokens > 1.0 {
             for (doc_idx, score) in &mut combined_scores {
                 let matched = token_match_counts.get(doc_idx).copied().unwrap_or(0) as f32;
                 let coverage = matched / total_tokens;
-                *score *= coverage * coverage;
+                let factor = (1.0 - COVERAGE_FLOOR).mul_add(coverage * coverage, COVERAGE_FLOOR);
+
+                // TF-IDF aggregates go negative for terms that are common relative to
+                // document length, so dividing keeps the demotion monotone for those.
+                if *score >= 0.0 {
+                    *score *= factor;
+                } else {
+                    *score /= factor;
+                }
             }
         }
 
@@ -437,6 +454,63 @@ mod tests {
             results[0].0 == vec![0u32],
             "Full match (doc 0) should rank above partial match (doc 1), \
              but top result was doc {:?}",
+            results[0].0
+        );
+    }
+
+    /// A document matching only part of a multi-word query must still surface with a
+    /// usable score, ranked below the full match.
+    ///
+    /// An unfloored `(matched / total)^2` factor shrinks as `1/N^2` in the query length,
+    /// leaving a single-term match on a three-word query at 11% of its score and pushing
+    /// real matches past the result limit.
+    #[test]
+    fn partial_match_keeps_usable_score() {
+        let cach = stem("cache");
+        let index_term = stem("index");
+        let invalid = stem("invalidation");
+
+        // Doc 0 matches all three query terms, doc 1 matches only "index".
+        let index = make_index(
+            vec![
+                (&cach, 0, 0.5),
+                (&index_term, 0, 0.5),
+                (&invalid, 0, 0.5),
+                (&index_term, 1, 1.0),
+            ],
+            2,
+        );
+
+        let results = index.search("cache index invalidation", 10);
+        check!(results.len() == 2, "Both documents should be returned");
+        check!(results[0].0 == vec![0u32], "Full match should rank first");
+        check!(results[1].0 == vec![1u32]);
+        check!(
+            results[1].1 >= COVERAGE_FLOOR,
+            "Partial match kept only {} of its 1.0 raw score",
+            results[1].1
+        );
+    }
+
+    /// TF-IDF scores are negative for terms that are frequent relative to document
+    /// length, and a multiplicative coverage penalty raises a negative score instead of
+    /// lowering it. The full match must still win.
+    #[test]
+    fn coverage_factor_demotes_negative_scores() {
+        let cach = stem("cache");
+        let invalid = stem("invalidation");
+
+        // Doc 0 matches both terms, doc 1 only one; both aggregate to a negative score.
+        let index = make_index(
+            vec![(&cach, 0, -0.5), (&invalid, 0, -0.5), (&invalid, 1, -0.9)],
+            2,
+        );
+
+        let results = index.search("cache invalidation", 10);
+        check!(results.len() == 2);
+        check!(
+            results[0].0 == vec![0u32],
+            "Full match should rank above partial match, but top result was doc {:?}",
             results[0].0
         );
     }
