@@ -1,7 +1,7 @@
 //! Iterator patterns for traversing documentation items with proper re-export handling.
 
 use crate::item::ItemRef;
-use rustdoc_types::{Id, Item, ItemEnum, ItemKind, Type, Use};
+use rustdoc_types::{Id, Item, ItemEnum, Type, Use};
 use std::collections::hash_map::Values;
 
 /// Iterator for methods defined in impl blocks
@@ -359,7 +359,6 @@ impl<'a> Iterator for UseIterator<'a> {
 pub struct ChildrenBuilder<'a> {
     item: ItemRef<'a, Item>,
     include_use: bool,
-    kind_filter: Option<ItemKind>,
 }
 
 impl<'a> ChildrenBuilder<'a> {
@@ -368,7 +367,6 @@ impl<'a> ChildrenBuilder<'a> {
         Self {
             item,
             include_use: false,
-            kind_filter: None,
         }
     }
 
@@ -378,20 +376,14 @@ impl<'a> ChildrenBuilder<'a> {
         self
     }
 
-    /// Filter children to only include items of a specific kind.
-    pub const fn only_kind(mut self, kind: ItemKind) -> Self {
-        self.kind_filter = Some(kind);
-        self
-    }
-
     /// Build and return the configured child iterator.
     pub fn build(self) -> ChildIterator<'a> {
-        let mut iterator = ChildIterator::new(self.item);
+        let iterator = ChildIterator::new(self.item);
         if self.include_use {
-            iterator = iterator.with_use();
+            iterator.with_use()
+        } else {
+            iterator
         }
-        // TODO: Apply kind_filter if needed
-        iterator
     }
 }
 
