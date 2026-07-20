@@ -50,10 +50,6 @@ pub(crate) fn render_struct(
                 fields,
                 has_stripped_fields,
             } => {
-                // TODO: when `has_stripped_fields` is true and no public fields are rendered,
-                // emit a note like "(N private fields not shown)" so the caller knows why
-                // Fields: is empty. Currently an all-private struct silently shows nothing.
-                let _ = has_stripped_fields;
                 for field_id in fields {
                     if let Some(field_item) = item.get(*field_id)
                         && let ItemEnum::StructField(ty) = field_item.inner()
@@ -63,6 +59,11 @@ pub(crate) fn render_struct(
                         fmt.write_type(output, ty)?;
                         writeln!(output)?;
                     }
+                }
+
+                // Rustdoc JSON reports only that fields were stripped, never how many.
+                if *has_stripped_fields {
+                    writeln!(output, "  /* private fields */")?;
                 }
             }
             rustdoc_types::StructKind::Tuple(fields) => {
@@ -520,4 +521,139 @@ pub(crate) fn render_item_signature(
 /// Extract documentation summary (first paragraph) for truncated output
 fn extract_summary(docs: &str) -> String {
     docs.split("\n\n").next().unwrap_or(docs).trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::{CrateIndex, QueryContext};
+    use crate::workspace::WorkspaceContext;
+    use assert2::check;
+    use rustdoc_types::{
+        Crate, Generics, Id, ItemSummary, Struct, StructKind, Target, Type, Visibility,
+    };
+    use std::sync::Arc;
+
+    fn item(id: u32, name: Option<&str>, inner: ItemEnum) -> Item {
+        Item {
+            id: Id(id),
+            crate_id: 0,
+            name: name.map(ToString::to_string),
+            span: None,
+            visibility: Visibility::Public,
+            docs: None,
+            links: HashMap::new(),
+            attrs: Vec::new(),
+            deprecation: None,
+            inner,
+        }
+    }
+
+    /// Build a one-struct crate whose plain fields and stripped flag are given.
+    fn crate_with_struct(field_names: &[&str], has_stripped_fields: bool) -> Crate {
+        let fields: Vec<Id> = (0..field_names.len())
+            .map(|i| Id(u32::try_from(i).unwrap() + 1))
+            .collect();
+
+        let mut index = HashMap::new();
+        for (i, field_name) in field_names.iter().enumerate() {
+            let id = u32::try_from(i).unwrap() + 1;
+            index.insert(
+                Id(id),
+                item(
+                    id,
+                    Some(field_name),
+                    ItemEnum::StructField(Type::Primitive("u32".to_string())),
+                ),
+            );
+        }
+        index.insert(
+            Id(0),
+            item(
+                0,
+                Some("Widget"),
+                ItemEnum::Struct(Struct {
+                    kind: StructKind::Plain {
+                        fields,
+                        has_stripped_fields,
+                    },
+                    generics: Generics {
+                        params: Vec::new(),
+                        where_predicates: Vec::new(),
+                    },
+                    impls: Vec::new(),
+                }),
+            ),
+        );
+
+        let mut paths = HashMap::new();
+        paths.insert(
+            Id(0),
+            ItemSummary {
+                crate_id: 0,
+                path: vec!["demo".to_string(), "Widget".to_string()],
+                kind: ItemKind::Struct,
+            },
+        );
+
+        Crate {
+            root: Id(0),
+            crate_version: None,
+            includes_private: false,
+            index,
+            paths,
+            external_crates: HashMap::new(),
+            target: Target {
+                triple: "x86_64-unknown-linux-gnu".to_string(),
+                target_features: Vec::new(),
+            },
+            format_version: rustdoc_types::FORMAT_VERSION,
+        }
+    }
+
+    /// Render the crate's single struct at the given detail level.
+    fn render(krate: &Crate) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.json");
+        std::fs::write(&path, serde_json::to_string(krate).unwrap()).unwrap();
+        let index = CrateIndex::load(&path).unwrap();
+
+        let query = QueryContext::new(Arc::new(WorkspaceContext {
+            root: dir.path().to_path_buf(),
+            members: Vec::new(),
+            crate_info: HashMap::new(),
+            root_crate: None,
+        }));
+
+        let item = index.get(&query, Id(0)).unwrap();
+        let ItemEnum::Struct(s) = item.inner() else {
+            panic!("expected a struct");
+        };
+
+        let mut output = String::new();
+        render_struct(&mut output, item, s, DetailLevel::High, "demo").unwrap();
+        output
+    }
+
+    #[test]
+    fn stripped_fields_only_renders_private_indicator() {
+        let output = render(&crate_with_struct(&[], true));
+        check!(output.contains("Fields:"));
+        check!(output.contains("/* private fields */"));
+    }
+
+    #[test]
+    fn mixed_visibility_lists_public_fields_then_indicator() {
+        let output = render(&crate_with_struct(&["width"], true));
+        let fields = output.split("Fields:").nth(1).unwrap();
+        check!(fields.contains("width: u32"));
+        check!(fields.find("width") < fields.find("/* private fields */"));
+    }
+
+    #[test]
+    fn fully_public_struct_has_no_private_indicator() {
+        let output = render(&crate_with_struct(&["width"], false));
+        check!(output.contains("width: u32"));
+        check!(!output.contains("/* private fields */"));
+    }
 }
