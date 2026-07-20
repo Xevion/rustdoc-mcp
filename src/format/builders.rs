@@ -5,7 +5,7 @@
 
 use crate::search::rustdoc::CrateIndex;
 use rustdoc_types::{
-    AssocItemConstraintKind, GenericArg, GenericArgs, GenericBound, GenericParamDef,
+    AssocItemConstraintKind, DynTrait, GenericArg, GenericArgs, GenericBound, GenericParamDef,
     GenericParamDefKind, Generics, Item, ItemEnum, Path, Term, TraitBoundModifier, Type,
     WherePredicate,
 };
@@ -71,10 +71,18 @@ impl<'a> TypeFormatter<'a> {
             }
             Type::FunctionPointer(_) => w.write_str("fn(...)"),
             Type::QualifiedPath { .. } => w.write_str("<qualified path>"),
-            // TODO: Handle these properly
-            Type::DynTrait(..) | Type::Pat { .. } | Type::ImplTrait(..) | Type::Infer => {
-                w.write_str("<type>")
+            Type::DynTrait(dyn_trait) => self.write_dyn_trait(w, dyn_trait),
+            Type::ImplTrait(bounds) => {
+                w.write_str("impl ")?;
+                self.write_bound_list(w, bounds)
             }
+            // The pattern itself lives in a `doc(hidden)` field the crate asks callers not to
+            // read, so only the base type is rendered.
+            Type::Pat { type_, .. } => {
+                self.write_type(w, type_)?;
+                w.write_str(" is _")
+            }
+            Type::Infer => w.write_char('_'),
         }
     }
 
@@ -214,15 +222,6 @@ impl<'a> TypeFormatter<'a> {
         self.write_where_clause(w, &func.generics.where_predicates, sig_len)
     }
 
-    /// Format generic args for a bound (no type name prefix).
-    /// Example: `<T>`, `<Item = usize>`
-    /// Private helper for internal use within format_generic_bound.
-    fn format_bound_args(&self, args: &GenericArgs) -> String {
-        let mut s = String::new();
-        let _ = self.write_bound_args(&mut s, args);
-        s
-    }
-
     /// Write generic args for a type path.
     fn write_type_args<W: Write>(&self, w: &mut W, name: &str, args: &GenericArgs) -> fmt::Result {
         match args {
@@ -330,6 +329,55 @@ impl<'a> TypeFormatter<'a> {
             w.write_str("mut ")?;
         }
         self.write_type(w, inner)
+    }
+
+    /// Write a trait reference with optional HRTB prefix and generic args: `for<'a> Fn(&'a str)`
+    fn write_trait_ref<W: Write>(
+        &self,
+        w: &mut W,
+        trait_: &Path,
+        generic_params: &[GenericParamDef],
+    ) -> fmt::Result {
+        if !generic_params.is_empty() {
+            let lifetimes: Vec<_> = generic_params.iter().map(|p| p.name.as_str()).collect();
+            write!(w, "for<{}> ", lifetimes.join(", "))?;
+        }
+
+        w.write_str(&self.format_path_for_bound(trait_))?;
+        if let Some(args) = &trait_.args {
+            self.write_bound_args(w, args)?;
+        }
+        Ok(())
+    }
+
+    /// Write a `+`-separated list of generic bounds.
+    fn write_bound_list<W: Write>(&self, w: &mut W, bounds: &[GenericBound]) -> fmt::Result {
+        for (i, bound) in bounds.iter().enumerate() {
+            if i > 0 {
+                w.write_str(" + ")?;
+            }
+            w.write_str(&self.format_generic_bound(bound))?;
+        }
+        Ok(())
+    }
+
+    /// Write a trait object type: `dyn Error + Send + 'static`
+    fn write_dyn_trait<W: Write>(&self, w: &mut W, dyn_trait: &DynTrait) -> fmt::Result {
+        w.write_str("dyn ")?;
+        for (i, poly) in dyn_trait.traits.iter().enumerate() {
+            if i > 0 {
+                w.write_str(" + ")?;
+            }
+            self.write_trait_ref(w, &poly.trait_, &poly.generic_params)?;
+        }
+
+        if let Some(lifetime) = &dyn_trait.lifetime {
+            if !dyn_trait.traits.is_empty() {
+                w.write_str(" + ")?;
+            }
+            w.write_str(lifetime)?;
+        }
+        Ok(())
     }
 
     /// Write angle-bracketed args (shared between type and bound contexts).
@@ -447,15 +495,6 @@ impl<'a> TypeFormatter<'a> {
             } => {
                 let mut result = String::new();
 
-                // HRTB: for<'a>
-                if !generic_params.is_empty() {
-                    result.push_str("for<");
-                    let lifetimes: Vec<_> =
-                        generic_params.iter().map(|p| p.name.as_str()).collect();
-                    result.push_str(&lifetimes.join(", "));
-                    result.push_str("> ");
-                }
-
                 // Modifier: ?, ~const
                 match modifier {
                     TraitBoundModifier::Maybe => result.push('?'),
@@ -463,12 +502,7 @@ impl<'a> TypeFormatter<'a> {
                     TraitBoundModifier::None => {}
                 }
 
-                // Trait path with generic args
-                result.push_str(&self.format_path_for_bound(trait_));
-                if let Some(args) = &trait_.args {
-                    result.push_str(&self.format_bound_args(args));
-                }
-
+                let _ = self.write_trait_ref(&mut result, trait_, generic_params);
                 result
             }
             GenericBound::Outlives(lifetime) => lifetime.clone(),
@@ -563,5 +597,127 @@ impl<'a> TypeFormatter<'a> {
                 s
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert2::check;
+    use rustdoc_types::{Crate, Id, ItemKind, ItemSummary, PolyTrait, Target};
+    use std::collections::HashMap;
+
+    /// Trait ids used by the fixtures below, paired with their fully qualified paths.
+    const ERROR: (u32, &[&str]) = (1, &["std", "error", "Error"]);
+    const SEND: (u32, &[&str]) = (2, &["core", "marker", "Send"]);
+    const ITERATOR: (u32, &[&str]) = (3, &["core", "iter", "Iterator"]);
+
+    fn test_index() -> CrateIndex {
+        let paths = [ERROR, SEND, ITERATOR]
+            .into_iter()
+            .map(|(id, segments)| {
+                let summary = ItemSummary {
+                    crate_id: 0,
+                    path: segments.iter().map(|s| (*s).to_string()).collect(),
+                    kind: ItemKind::Trait,
+                };
+                (Id(id), summary)
+            })
+            .collect();
+
+        CrateIndex::from_crate(Crate {
+            root: Id(0),
+            crate_version: None,
+            includes_private: false,
+            index: HashMap::new(),
+            paths,
+            external_crates: HashMap::new(),
+            target: Target {
+                triple: "x86_64-unknown-linux-gnu".to_string(),
+                target_features: Vec::new(),
+            },
+            format_version: rustdoc_types::FORMAT_VERSION,
+        })
+    }
+
+    fn trait_path((id, segments): (u32, &[&str])) -> Path {
+        Path {
+            path: segments.join("::"),
+            id: Id(id),
+            args: None,
+        }
+    }
+
+    fn trait_bound(trait_: (u32, &[&str])) -> GenericBound {
+        GenericBound::TraitBound {
+            trait_: trait_path(trait_),
+            generic_params: Vec::new(),
+            modifier: TraitBoundModifier::None,
+        }
+    }
+
+    fn render(ty: &Type) -> String {
+        let index = test_index();
+        let mut out = String::new();
+        TypeFormatter::new(&index).write_type(&mut out, ty).unwrap();
+        out
+    }
+
+    #[test]
+    fn dyn_trait_renders_traits_and_lifetime() {
+        let ty = Type::DynTrait(DynTrait {
+            traits: vec![
+                PolyTrait {
+                    trait_: trait_path(ERROR),
+                    generic_params: Vec::new(),
+                },
+                PolyTrait {
+                    trait_: trait_path(SEND),
+                    generic_params: Vec::new(),
+                },
+            ],
+            lifetime: Some("'static".to_string()),
+        });
+
+        check!(render(&ty) == "dyn Error + Send + 'static");
+    }
+
+    #[test]
+    fn dyn_trait_without_lifetime_omits_bound() {
+        let ty = Type::DynTrait(DynTrait {
+            traits: vec![PolyTrait {
+                trait_: trait_path(ERROR),
+                generic_params: Vec::new(),
+            }],
+            lifetime: None,
+        });
+
+        check!(render(&ty) == "dyn Error");
+    }
+
+    #[test]
+    fn impl_trait_renders_bounds() {
+        let ty = Type::ImplTrait(vec![
+            trait_bound(ITERATOR),
+            trait_bound(SEND),
+            GenericBound::Outlives("'a".to_string()),
+        ]);
+
+        check!(render(&ty) == "impl Iterator + Send + 'a");
+    }
+
+    #[test]
+    fn pattern_type_renders_base_type() {
+        let ty = Type::Pat {
+            type_: Box::new(Type::Primitive("u32".to_string())),
+            __pat_unstable_do_not_use: "1..".to_string(),
+        };
+
+        check!(render(&ty) == "u32 is _");
+    }
+
+    #[test]
+    fn infer_renders_underscore() {
+        check!(render(&Type::Infer) == "_");
     }
 }

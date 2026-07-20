@@ -147,6 +147,18 @@ impl CrateIndex {
         })
     }
 
+    /// Build an index directly from an in-memory crate, for tests that need a formatter
+    /// without a rustdoc JSON file on disk.
+    #[cfg(test)]
+    pub(crate) fn from_crate(crate_data: Crate) -> Self {
+        let index = crate_data.index.clone();
+        Self {
+            crate_data,
+            index,
+            _external_crates: HashMap::new(),
+        }
+    }
+
     /// Async wrapper around [`Self::load`] that offloads blocking I/O to a thread pool.
     pub async fn load_async<P: AsRef<Path> + Send + 'static>(path: P) -> Result<Self> {
         tokio::task::spawn_blocking(move || Self::load(path))
