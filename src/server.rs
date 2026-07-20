@@ -136,7 +136,9 @@ impl ItemServer {
     }
 }
 
-#[tool_handler]
+// Without an explicit router the macro rebuilds the router on every call; point it at the
+// one constructed once in `new`.
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for ItemServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
