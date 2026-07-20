@@ -21,7 +21,7 @@ use crate::search::{
     parse_item_path, resolve_crate_from_path, score_to_percent,
 };
 use crate::stdlib::StdlibDocs;
-use crate::types::CrateName;
+use crate::types::{CrateName, qualify_path};
 use crate::worker::DocState;
 
 use rmcp::schemars;
@@ -475,13 +475,15 @@ fn build_candidates(
         .iter()
         .take(10)
         .map(|result| {
-            let full_path = if let Some(src_crate) = &result.source_crate {
-                format!("{}::{}", src_crate.as_str(), result.path)
-            } else if let Some(fc) = fallback_crate {
-                format!("{}::{}", fc, result.path)
-            } else {
-                result.path.clone()
-            };
+            let crate_prefix = result
+                .source_crate
+                .as_ref()
+                .map(CrateName::as_str)
+                .or(fallback_crate);
+            let full_path = crate_prefix.map_or_else(
+                || result.path.clone(),
+                |prefix| qualify_path(&result.path, prefix),
+            );
 
             let first_doc_line = result.docs.as_ref().and_then(|docs| {
                 docs.lines()
@@ -696,4 +698,51 @@ fn maybe_append_hint(
         }
         other @ StructuredInspectResult::Disambiguation { .. } => other,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert2::check;
+
+    fn result_with(path: &str, source_crate: Option<&str>) -> DetailedSearchResult {
+        DetailedSearchResult {
+            name: "QueryContext".to_string(),
+            path: path.to_string(),
+            kind: "struct".to_string(),
+            crate_name: None,
+            docs: None,
+            id: None,
+            relevance: 100,
+            source_crate: source_crate.map(|c| CrateName::new(c).unwrap()),
+        }
+    }
+
+    #[test]
+    fn candidates_do_not_double_hyphenated_crate_name() {
+        let results = vec![result_with(
+            "rustdoc_mcp::search::query::QueryContext",
+            Some("rustdoc-mcp"),
+        )];
+        let candidates = build_candidates(&results, None);
+
+        check!(candidates.len() == 1);
+        check!(candidates[0].full_path == "rustdoc_mcp::search::query::QueryContext");
+    }
+
+    #[test]
+    fn candidates_use_fallback_crate_when_source_missing() {
+        let results = vec![result_with("search::query::QueryContext", None)];
+        let candidates = build_candidates(&results, Some("rustdoc-mcp"));
+
+        check!(candidates[0].full_path == "rustdoc-mcp::search::query::QueryContext");
+    }
+
+    #[test]
+    fn candidates_leave_path_alone_without_crate_information() {
+        let results = vec![result_with("search::query::QueryContext", None)];
+        let candidates = build_candidates(&results, None);
+
+        check!(candidates[0].full_path == "search::query::QueryContext");
+    }
 }

@@ -14,6 +14,21 @@ use std::path::{Path, PathBuf};
 
 use crate::error::CrateNameError;
 
+/// Prefix `path` with `crate_name`, unless its first segment already names that
+/// crate.
+///
+/// Item paths are crate-qualified with the module form of the name
+/// (`rustdoc_mcp`) while a package name may be hyphenated (`rustdoc-mcp`), so
+/// the segments are compared in normalized form.
+pub fn qualify_path(path: &str, crate_name: &str) -> String {
+    let first_segment = path.split("::").next().unwrap_or(path);
+    if CrateName::normalize(first_segment) == CrateName::normalize(crate_name) {
+        path.to_string()
+    } else {
+        format!("{crate_name}::{path}")
+    }
+}
+
 /// Kind of type definition (struct, enum, or union).
 ///
 /// Replaces the previous `kind: String` field in `TypeInfo`.
@@ -312,6 +327,37 @@ impl<'de> Deserialize<'de> for CrateName {
 mod tests {
     use super::*;
     use assert2::check;
+
+    #[test]
+    fn test_qualify_path_keeps_existing_crate_segment() {
+        check!(
+            qualify_path("rustdoc_mcp::search::QueryContext", "rustdoc_mcp")
+                == "rustdoc_mcp::search::QueryContext"
+        );
+    }
+
+    #[test]
+    fn test_qualify_path_matches_hyphenated_package_name() {
+        check!(
+            qualify_path("rustdoc_mcp::search::QueryContext", "rustdoc-mcp")
+                == "rustdoc_mcp::search::QueryContext"
+        );
+    }
+
+    #[test]
+    fn test_qualify_path_prepends_when_missing() {
+        check!(
+            qualify_path("search::QueryContext", "rustdoc-mcp")
+                == "rustdoc-mcp::search::QueryContext"
+        );
+    }
+
+    #[test]
+    fn test_qualify_path_handles_single_segment() {
+        check!(qualify_path("QueryContext", "serde") == "serde::QueryContext");
+        check!(qualify_path("serde", "serde") == "serde");
+        check!(qualify_path("rustdoc_mcp", "rustdoc-mcp") == "rustdoc_mcp");
+    }
 
     #[test]
     fn test_type_kind_display() {

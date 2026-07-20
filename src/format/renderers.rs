@@ -5,6 +5,7 @@
 
 use super::{DetailLevel, TypeFormatter};
 use crate::item::item_ref::ItemRef;
+use crate::types::qualify_path;
 use rustdoc_types::{Item, ItemEnum, ItemKind};
 use std::collections::HashMap;
 use std::fmt::{self, Write as _};
@@ -31,7 +32,7 @@ pub(crate) fn render_struct(
     fmt.write_where_clause(output, &s.generics.where_predicates, sig_len)?;
 
     writeln!(output, " {{")?;
-    writeln!(output, "  // in {}::{}", crate_name, path)?;
+    writeln!(output, "  // in {}", qualify_path(&path, crate_name))?;
     writeln!(output, "}}")?;
 
     // Medium: add short docs
@@ -109,7 +110,7 @@ pub(crate) fn render_enum(
     fmt.write_where_clause(output, &e.generics.where_predicates, sig_len)?;
 
     writeln!(output, " {{")?;
-    writeln!(output, "  // in {}::{}", crate_name, path)?;
+    writeln!(output, "  // in {}", qualify_path(&path, crate_name))?;
     writeln!(output, "}}")?;
 
     // Medium: add short docs
@@ -186,7 +187,7 @@ pub(crate) fn render_function(
     // Low: signature only
     fmt.write_function_signature(output, &item)?;
     writeln!(output)?;
-    writeln!(output, "// in {}::{}", crate_name, path)?;
+    writeln!(output, "// in {}", qualify_path(&path, crate_name))?;
 
     // Medium: add short docs
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
@@ -224,7 +225,7 @@ pub(crate) fn render_trait(
     fmt.write_where_clause(output, &t.generics.where_predicates, sig_len)?;
 
     writeln!(output, " {{")?;
-    writeln!(output, "  // in {}::{}", crate_name, path)?;
+    writeln!(output, "  // in {}", qualify_path(&path, crate_name))?;
     writeln!(output, "}}")?;
 
     // Medium: add short docs
@@ -279,7 +280,7 @@ pub(crate) fn render_module(
         .map_or_else(|| name.to_string(), |p| p.to_string());
 
     writeln!(output, "module {}", name)?;
-    writeln!(output, "// in {}::{}", crate_name, path)?;
+    writeln!(output, "// in {}", qualify_path(&path, crate_name))?;
 
     // Get module's child items
     let children: Vec<_> = item.children().build().collect();
@@ -387,7 +388,7 @@ pub(crate) fn render_type_alias(
     write!(output, " = ")?;
     fmt.write_type(output, &ta.type_)?;
     writeln!(output, ";")?;
-    writeln!(output, "// in {}::{}", crate_name, path)?;
+    writeln!(output, "// in {}", qualify_path(&path, crate_name))?;
 
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
@@ -416,7 +417,7 @@ pub(crate) fn render_constant(
     write!(output, "const {}: ", name)?;
     fmt.write_type(output, type_)?;
     writeln!(output, ";")?;
-    writeln!(output, "// in {}::{}", crate_name, path)?;
+    writeln!(output, "// in {}", qualify_path(&path, crate_name))?;
 
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
@@ -450,7 +451,7 @@ pub(crate) fn render_static(
     )?;
     fmt.write_type(output, &s.type_)?;
     writeln!(output, ";")?;
-    writeln!(output, "// in {}::{}", crate_name, path)?;
+    writeln!(output, "// in {}", qualify_path(&path, crate_name))?;
 
     if matches!(detail_level, DetailLevel::Medium | DetailLevel::High)
         && let Some(docs) = item.comment()
