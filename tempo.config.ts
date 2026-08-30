@@ -1,29 +1,29 @@
-import { defineConfig, presets, runners } from "@xevion/tempo";
-
-const serverPreset = presets.rust();
+import { defineConfig, presets, task } from "@xevion/tempo";
 
 export default defineConfig({
-  subsystems: {
-    server: {
-      ...serverPreset,
-      aliases: ["s", "srv"],
-      commands: {
-        ...serverPreset.commands,
+  tasks: [
+    ...presets.rust({
+      name: "server",
+      override: {
         lint: "cargo clippy --workspace --all-targets -- -D warnings",
-        "dep-check": {
-          cmd: "cargo machete --with-metadata",
-        },
-        deny: {
-          cmd: "cargo deny check",
-          requires: [{ tool: "cargo-deny", hint: "Install with `cargo install cargo-deny`" }],
-        },
       },
-    },
-  },
+    }),
+    task({
+      name: "server:dep-check",
+      body: "cargo machete --with-metadata",
+      tags: ["check"],
+      requires: [{ tool: "cargo-machete", hint: "cargo install cargo-machete" }],
+    }),
+    task({
+      name: "server:deny",
+      body: "cargo deny check",
+      tags: ["check"],
+      requires: [{ tool: "cargo-deny", hint: "cargo install cargo-deny" }],
+    }),
+  ],
   commands: {
-    check: runners.check({ autoFixStrategy: "fix-first" }),
-    fmt: runners.sequential("format-apply", { description: "Sequential per-subsystem formatting", autoFixFallback: true }),
-    lint: runners.sequential("lint", { description: "Sequential per-subsystem linting" }),
-    "pre-commit": runners.preCommit(),
+    check: { description: "Run every check", tags: ["check"] },
+    fmt: { description: "Apply every formatter", tags: ["format"], concurrency: 1 },
+    lint: { description: "Clippy only", tags: ["lint"] },
   },
 });
