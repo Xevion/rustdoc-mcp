@@ -14,6 +14,13 @@
   "separateMultipleMajor": true,
   "labels": ["dependencies"],
   "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["dependencies", "security"],
+    "schedule": ["at any time"],
+    "minimumReleaseAge": null
+  },
+  "osvVulnerabilityAlerts": true,
   "packageRules": [
     {
       "description": "Tokio async runtime ecosystem",
