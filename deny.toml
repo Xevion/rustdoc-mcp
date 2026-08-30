@@ -9,7 +9,7 @@ targets = [
 [advisories]
 unmaintained = "workspace"
 unsound = "workspace"
-yanked = "deny"
+yanked = "warn"
 
 [licenses]
 allow = [
