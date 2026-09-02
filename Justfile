@@ -29,12 +29,16 @@ install:
 install-release:
     cargo install --path .
 
-# Supply-chain audit
+# Licences, bans and sources
 deny:
-    cargo deny check
+    cargo deny check bans sources licenses
+
+# Dependency advisories, the same scan CI runs
+audit *args:
+    bunx github:Xevion/advisory-action#v1.1.0 {{ args }}
 
 # Full CI gate (ordered, fail-fast)
-ci: fmt-check check deny test
+ci: fmt-check check deny audit test
 
 # Clear generated rustdoc data (preserves binaries and caches)
 clear:

@@ -38,7 +38,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@cargo-deny
-      - run: cargo deny check
+      # Advisories are the advisory job's; cargo-deny keeps what it alone does.
+      - run: cargo deny check bans sources licenses
+
+  advisories:
+    name: Advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the baseline is scanned from a worktree
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Xevion/advisory-action@v1
 
   test:
     name: Test

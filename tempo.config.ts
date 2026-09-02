@@ -16,7 +16,7 @@ export default defineConfig({
     }),
     task({
       name: "server:deny",
-      body: "cargo deny check",
+      body: "cargo deny check bans sources licenses",
       tags: ["check"],
       requires: [{ tool: "cargo-deny", hint: "cargo install cargo-deny" }],
     }),

@@ -6,11 +6,6 @@ targets = [
     { triple = "aarch64-apple-darwin" },
 ]
 
-[advisories]
-unmaintained = "workspace"
-unsound = "workspace"
-yanked = "warn"
-
 [licenses]
 allow = [
     "MIT",
