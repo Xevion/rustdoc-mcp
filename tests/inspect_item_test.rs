@@ -1,6 +1,6 @@
 mod common;
 
-use assert2::{check, let_assert};
+use assert2::{assert, check};
 use common::{
     IsolatedWorkspace, isolated_workspace, isolated_workspace_with_anyhow,
     isolated_workspace_with_serde,
@@ -19,7 +19,7 @@ async fn inspect_finds_serialize_trait(isolated_workspace_with_serde: IsolatedWo
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
     check!(output.contains("Serialize"));
@@ -36,7 +36,7 @@ async fn inspect_successful_simple_lookup(isolated_workspace_with_serde: Isolate
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
     check!(output.contains("Deserialize"));
@@ -53,7 +53,7 @@ async fn inspect_successful_qualified_path(isolated_workspace_with_serde: Isolat
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
     check!(output.contains("Serialize"));
@@ -70,7 +70,7 @@ async fn inspect_no_matches_found(isolated_workspace: IsolatedWorkspace) {
     };
 
     let result = handle_inspect_item(&isolated_workspace.state, request).await;
-    let_assert!(Err(err) = result);
+    assert!(let Err(err) = result);
     check!(err.contains("No items found matching"));
     check!(err.contains("NonExistentItemXYZ123"));
 }
@@ -85,7 +85,7 @@ async fn inspect_minimal_verbosity(isolated_workspace_with_serde: IsolatedWorksp
         detail_level: DetailLevel::Low,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
 
@@ -104,7 +104,7 @@ async fn inspect_full_verbosity(isolated_workspace_with_serde: IsolatedWorkspace
         detail_level: DetailLevel::High,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
     check!(output.contains("Deserialize"));
@@ -122,7 +122,7 @@ async fn inspect_function_lookup(isolated_workspace_with_serde: IsolatedWorkspac
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
     // to_string<T: Serialize> — the function bound uses Serialize, not Deserialize
@@ -139,7 +139,7 @@ async fn inspect_enum_with_variants(isolated_workspace_with_serde: IsolatedWorks
         detail_level: DetailLevel::High,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace_with_serde.state, request).await
     );
     // Value enum should show its variants at high detail
@@ -163,7 +163,7 @@ async fn inspect_local_struct_simple_name(isolated_workspace: IsolatedWorkspace)
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
         "Should find QueryContext by simple name"
     );
@@ -187,7 +187,7 @@ async fn inspect_local_struct_full_path(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
         "Should find QueryContext by full path"
     );
@@ -205,7 +205,7 @@ async fn inspect_local_module(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
         "Should find workspace module"
     );
@@ -223,7 +223,7 @@ async fn inspect_local_trait(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
         "Should find TypeFormatter struct"
     );
@@ -254,7 +254,7 @@ async fn inspect_local_servicecontext(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
         "Should find ServiceContext struct via simple-name exact-match disambiguation"
     );
@@ -273,7 +273,7 @@ async fn inspect_local_with_hyphenated_crate_name(isolated_workspace: IsolatedWo
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
         "Should find WorkspaceContext with hyphenated crate name"
     );
@@ -291,7 +291,7 @@ async fn inspect_trait_shows_signature(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Low,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
         "Should find TypeFormatter struct"
     );
@@ -310,7 +310,7 @@ async fn inspect_trait_shows_generics(isolated_workspace: IsolatedWorkspace) {
         detail_level: DetailLevel::Low,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await,
         "Should find TypeFormatter struct"
     );
@@ -330,7 +330,7 @@ async fn inspect_kind_mismatch_suggests_correct_kind(isolated_workspace: Isolate
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(Err(err) = handle_inspect_item(&isolated_workspace.state, request).await);
+    assert!(let Err(err) = handle_inspect_item(&isolated_workspace.state, request).await);
     check!(err.contains("QueryContext"), "error should name the item");
     // Should tell the user the item exists but under a different kind
     check!(
@@ -361,7 +361,7 @@ async fn inspect_bare_result_shows_disambiguation(
     };
 
     let result = handle_inspect_item(&isolated_workspace_with_anyhow.state, request).await;
-    let_assert!(Ok(output) = result, "Should succeed, not error");
+    assert!(let Ok(output) = result, "Should succeed, not error");
 
     // Should show multiple matches, not silently pick one
     // Disambiguation output should mention both crates
@@ -406,7 +406,7 @@ async fn inspect_type_alias_shows_qualified_target(
         detail_level: DetailLevel::Medium,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_inspect_item(&isolated_workspace_with_anyhow.state, request).await,
         "Should find rustdoc_mcp::Result type alias"
     );

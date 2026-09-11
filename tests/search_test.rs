@@ -1,6 +1,6 @@
 mod common;
 
-use assert2::{assert, check, let_assert};
+use assert2::{assert, check};
 use common::{
     IsolatedWorkspace, isolated_workspace, isolated_workspace_with_anyhow,
     isolated_workspace_with_serde, warm_cache,
@@ -21,7 +21,7 @@ async fn search_finds_querycontext(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_search(&isolated_workspace.state, request).await,
         "Search should succeed"
     );
@@ -47,7 +47,7 @@ async fn search_finds_servercontext(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         output.contains("ServerContext"),
         "Should find ServerContext: {}",
@@ -65,7 +65,7 @@ async fn search_finds_crateorigin(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         output.contains("CrateOrigin"),
         "Should find CrateOrigin: {}",
@@ -83,7 +83,7 @@ async fn search_finds_traititerator(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace.state, request).await);
     // Must check for "No results" FIRST - the error message contains the search term
     check!(
         !output.contains("No results found"),
@@ -106,7 +106,7 @@ async fn search_finds_backgroundworker(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace.state, request).await);
     // Must check for "No results" FIRST - the error message contains the search term
     check!(
         !output.contains("No results found"),
@@ -129,7 +129,7 @@ async fn search_finds_typeformatter_trait(isolated_workspace: IsolatedWorkspace)
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -151,7 +151,7 @@ async fn search_finds_module_cache(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -173,7 +173,7 @@ async fn search_finds_itemref(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -192,7 +192,7 @@ async fn search_finds_serde_serialize(isolated_workspace_with_serde: IsolatedWor
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -214,7 +214,7 @@ async fn search_finds_serde_deserialize(isolated_workspace_with_serde: IsolatedW
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -236,7 +236,7 @@ async fn search_finds_serde_deserializer(isolated_workspace_with_serde: Isolated
         limit: 5,
     };
 
-    let_assert!(Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace_with_serde.state, request).await);
     check!(
         !output.contains("No results found"),
         "Should not say 'no results found': {}",
@@ -262,7 +262,7 @@ async fn search_with_fresh_index_build(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_search(&isolated_workspace.state, request).await,
         "Fresh index search should succeed"
     );
@@ -303,7 +303,7 @@ async fn search_works_with_warm_cache(isolated_workspace: IsolatedWorkspace) {
         limit: 5,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_search(&isolated_workspace.state, request).await,
         "Search should succeed with warm cache"
     );
@@ -327,7 +327,7 @@ async fn search_nonexistent_crate_error(isolated_workspace: IsolatedWorkspace) {
     };
 
     // Should return Ok with a suggestion message, not an Err
-    let_assert!(Ok(output) = handle_search(&isolated_workspace.state, request).await);
+    assert!(let Ok(output) = handle_search(&isolated_workspace.state, request).await);
     check!(
         output.contains("not found") || output.contains("Did you mean"),
         "Should give helpful error for nonexistent crate: {}",
@@ -494,7 +494,7 @@ async fn search_finds_anyhow_error(isolated_workspace_with_anyhow: IsolatedWorks
         limit: 10,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_search(&isolated_workspace_with_anyhow.state, request).await,
         "Search in anyhow should succeed"
     );
@@ -520,7 +520,7 @@ async fn search_finds_anyhow_context(isolated_workspace_with_anyhow: IsolatedWor
         limit: 10,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_search(&isolated_workspace_with_anyhow.state, request).await,
         "Search in anyhow should succeed"
     );
@@ -546,7 +546,7 @@ async fn search_finds_anyhow_result(isolated_workspace_with_anyhow: IsolatedWork
         limit: 10,
     };
 
-    let_assert!(
+    assert!(let
         Ok(output) = handle_search(&isolated_workspace_with_anyhow.state, request).await,
         "Search in anyhow should succeed"
     );

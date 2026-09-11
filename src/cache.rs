@@ -270,7 +270,7 @@ async fn hash_directory(dir: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assert2::{check, let_assert};
+    use assert2::{assert, check};
     use rstest::rstest;
 
     #[rstest]
@@ -314,7 +314,7 @@ mod tests {
     #[case("123456789abcdefg", ParseHashError::InvalidHex)]
     fn test_invalid_hex(#[case] input: &str, #[case] expected_error: ParseHashError) {
         let result = input.parse::<Hash>();
-        let_assert!(Err(err) = result);
+        assert!(let Err(err) = result);
         check!(err == expected_error);
     }
 
@@ -326,7 +326,7 @@ mod tests {
     #[case("abc", 3)]
     fn test_invalid_length(#[case] input: &str, #[case] len: usize) {
         let result = input.parse::<Hash>();
-        let_assert!(Err(ParseHashError::InvalidLength { length }) = result);
+        assert!(let Err(ParseHashError::InvalidLength { length }) = result);
         check!(length == len);
     }
 

@@ -566,7 +566,7 @@ async fn render_stdlib_detail_mode(
 mod tests {
     use super::*;
     use crate::workspace::{CrateMetadata, WorkspaceContext};
-    use assert2::{check, let_assert};
+    use assert2::{assert, check};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -593,7 +593,7 @@ mod tests {
         };
 
         let result = handle_inspect_crate(&state, request).await;
-        let_assert!(Err(err) = result);
+        assert!(let Err(err) = result);
         // Error should mention both workspace and stdlib not being available
         check!(err.to_string().contains("No workspace configured"));
     }
@@ -679,7 +679,7 @@ mod tests {
         };
 
         let result = handle_inspect_crate(&state, request).await;
-        let_assert!(Err(err) = result);
+        assert!(let Err(err) = result);
         check!(err.to_string().contains("not found"));
     }
 

@@ -1,6 +1,6 @@
 mod common;
 
-use assert2::{check, let_assert};
+use assert2::{assert, check};
 use common::TempWorkspace;
 use rustdoc_mcp::workspace::{
     find_cargo_toml_with_constraints, find_git_root, find_workspace_root, has_workspace_section,
@@ -14,7 +14,7 @@ fn test_find_cargo_toml_in_current_directory() {
     workspace.create_cargo_toml("Cargo.toml", false);
 
     let result = find_cargo_toml_with_constraints(workspace.path());
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path().join("Cargo.toml"));
 }
 
@@ -25,7 +25,7 @@ fn test_find_cargo_toml_one_directory_up() {
     workspace.create_dir("subdir");
 
     let result = find_cargo_toml_with_constraints(&workspace.path().join("subdir"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path().join("Cargo.toml"));
 }
 
@@ -36,7 +36,7 @@ fn test_find_cargo_toml_two_directories_up_no_git() {
     workspace.create_dir("dir1/dir2");
 
     let result = find_cargo_toml_with_constraints(&workspace.path().join("dir1/dir2"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path().join("Cargo.toml"));
 }
 
@@ -60,7 +60,7 @@ fn test_unlimited_depth_in_git_repo() {
 
     // In a Git repo, can search unlimited depth
     let result = find_cargo_toml_with_constraints(&workspace.path().join("dir1/dir2/dir3/dir4"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path().join("Cargo.toml"));
 }
 
@@ -76,7 +76,7 @@ fn test_stop_at_git_repository_root() {
 
     // Should find repo/Cargo.toml, not parent/Cargo.toml
     let result = find_cargo_toml_with_constraints(&workspace.path().join("parent/repo/subdir"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path().join("parent/repo/Cargo.toml"));
 }
 
@@ -93,7 +93,7 @@ fn test_git_submodule_boundary() {
 
     // Should find submodule/Cargo.toml, not exit to parent
     let result = find_cargo_toml_with_constraints(&workspace.path().join("parent/submodule/deep"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path().join("parent/submodule/Cargo.toml"));
 }
 
@@ -104,7 +104,7 @@ fn test_find_git_root_in_repo() {
     workspace.create_dir("deep/nested/path");
 
     let result = find_git_root(&workspace.path().join("deep/nested/path"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path());
 }
 
@@ -127,7 +127,7 @@ fn test_find_git_root_with_submodule() {
 
     // Should find submodule as the git root (innermost .git)
     let result = find_git_root(&workspace.path().join("submodule/nested"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path().join("submodule"));
 }
 
@@ -172,7 +172,7 @@ fn test_find_workspace_root_already_workspace() {
     workspace.create_cargo_toml("Cargo.toml", true);
 
     let result = find_workspace_root(workspace.path());
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path());
 }
 
@@ -184,7 +184,7 @@ fn test_find_workspace_root_from_package() {
     workspace.create_cargo_toml("member/Cargo.toml", false);
 
     let result = find_workspace_root(&workspace.path().join("member"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path());
 }
 
@@ -199,7 +199,7 @@ fn test_find_workspace_root_nested_packages() {
 
     // Should walk up past both packages to find workspace
     let result = find_workspace_root(&workspace.path().join("member1/nested"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path());
 }
 
@@ -210,7 +210,7 @@ fn test_find_workspace_root_package_without_workspace() {
 
     // No workspace found, should return the package directory itself
     let result = find_workspace_root(workspace.path());
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path());
 }
 
@@ -294,6 +294,6 @@ fn test_multiple_cargo_toml_finds_nearest() {
 
     // Should find nested/Cargo.toml (nearest one)
     let result = find_cargo_toml_with_constraints(&workspace.path().join("nested/deep"));
-    let_assert!(Some(found) = result);
+    assert!(let Some(found) = result);
     check!(found == workspace.path().join("nested/Cargo.toml"));
 }

@@ -2,7 +2,7 @@
 
 mod common;
 
-use assert2::{assert, check, let_assert};
+use assert2::{assert, check};
 use common::TempWorkspace;
 use rstest::rstest;
 use rustdoc_mcp::CrateName;
@@ -12,11 +12,11 @@ use std::path::PathBuf;
 #[tokio::test]
 async fn lockfile_lookup_returns_original_hyphenated_name() {
     let lock_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock");
-    let_assert!(Ok(crates) = parse_cargo_lock(&lock_path).await);
+    assert!(let Ok(crates) = parse_cargo_lock(&lock_path).await);
 
     // Lookup with underscores should find the entry
     let entry = crates.get("tracing_attributes");
-    let_assert!(Some(entry) = entry);
+    assert!(let Some(entry) = entry);
 
     // Entry should have original hyphenated name
     check!(entry.name.as_str() == "tracing-attributes");
@@ -63,7 +63,7 @@ async fn cargo_rejects_underscored_package_names() {
 
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let_assert!(
+    assert!(let
         Ok(output) = Command::new("cargo")
             .current_dir(&workspace_root)
             .args([
@@ -86,7 +86,7 @@ async fn cargo_accepts_hyphenated_package_names() {
 
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let_assert!(
+    assert!(let
         Ok(output) = Command::new("cargo")
             .current_dir(&workspace_root)
             .args([
@@ -150,8 +150,8 @@ async fn load_crate_returns_consistent_errors() {
     let result1 = ctx.load_crate("nonexistent");
     let result2 = ctx.load_crate("nonexistent");
 
-    let_assert!(Err(err1) = result1);
-    let_assert!(Err(err2) = result2);
+    assert!(let Err(err1) = result1);
+    assert!(let Err(err2) = result2);
     check!(
         err1.to_string() == err2.to_string(),
         "Errors should match: {} vs {}",
