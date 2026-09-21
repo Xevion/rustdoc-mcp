@@ -496,6 +496,70 @@ impl QueryContext {
         }
     }
 
+    /// Resolve a path against where items are defined, rather than how they are exported.
+    ///
+    /// rustdoc omits a non-public module's contents from its parent's item list, so the
+    /// module walk in [`Self::resolve_path`] cannot reach an item whose path runs through
+    /// one, even though the tool prints exactly that path for the item it did resolve.
+    /// The crate's path table records definition sites and does reach it.
+    ///
+    /// Scoped to explicit user path queries. Re-export resolution during indexing keeps
+    /// using the module walk, which only ever surfaces publicly reachable items.
+    pub fn resolve_definition_path<'a>(
+        &'a self,
+        path: &str,
+        kind: Option<crate::search::ItemKind>,
+    ) -> Option<ItemRef<'a, Item>> {
+        let (crate_name, _) = path
+            .find("::")
+            .map_or((path, None), |i| (&path[..i], Some(i + 2)));
+        let crate_index = self.load_crate_with_discovery(crate_name).ok()?;
+
+        // The crate segment reaches here in whatever form the user typed, while the
+        // path table always spells it with underscores.
+        let wanted: Vec<&str> = path.split("::").collect();
+        let mut matched: Option<rustdoc_types::Id> = None;
+        for (id, summary) in crate_index.paths() {
+            if summary.path.len() != wanted.len() {
+                continue;
+            }
+            let same =
+                summary
+                    .path
+                    .iter()
+                    .zip(&wanted)
+                    .enumerate()
+                    .all(|(position, (segment, want))| {
+                        if position == 0 {
+                            *segment == CrateName::normalize(want)
+                        } else {
+                            segment == want
+                        }
+                    });
+            if !same {
+                continue;
+            }
+            // Several items can share one path across Rust's namespaces, so a kind
+            // hint is the only thing that separates them. Without one, an ambiguous
+            // path resolves to nothing rather than to an arbitrary winner.
+            let qualifies = match kind {
+                Some(wanted) => crate_index
+                    .get_item(*id)
+                    .is_some_and(|item| crate::search::matches_kind(&item.inner, wanted)),
+                None => true,
+            };
+            if !qualifies {
+                continue;
+            }
+            if matched.is_some() {
+                return None;
+            }
+            matched = Some(*id);
+        }
+
+        self.get_item(crate_index, matched?)
+    }
+
     /// Load a crate, discovering it from existing doc files if not in known crates.
     ///
     /// This is useful for loading crates like `serde_core` that are internal

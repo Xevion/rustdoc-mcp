@@ -432,3 +432,44 @@ async fn inspect_type_alias_shows_qualified_target(
         output
     );
 }
+
+/// A source path through a non-public module is what the tool itself prints when
+/// it resolves an item, so it has to be accepted back. rustdoc omits `pub(crate)`
+/// modules from their parent's item list, which the module-tree walk alone cannot
+/// see past.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_resolves_definition_site_path(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "rustdoc_mcp::search::query::QueryContext".to_string(),
+        kind: None,
+        detail_level: DetailLevel::Low,
+    };
+
+    assert!(let Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await);
+    check!(
+        !output.contains("Multiple items found"),
+        "fell through to fuzzy matching: {output}"
+    );
+    check!(output.contains("QueryContext"), "wrong item: {output}");
+}
+
+/// A path query that fails to resolve still reports what was asked for. Echoing a
+/// crate-stripped path sends the reader looking for a query they never typed.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_path_query_echoes_the_full_query(isolated_workspace: IsolatedWorkspace) {
+    let request = InspectItemRequest {
+        query: "rustdoc_mcp::nowhere::QqqZzzXxx".to_string(),
+        kind: None,
+        detail_level: DetailLevel::Low,
+    };
+
+    let outcome = handle_inspect_item(&isolated_workspace.state, request).await;
+
+    assert!(let Err(message) = outcome);
+    check!(
+        message.contains("rustdoc_mcp::nowhere::QqqZzzXxx"),
+        "error dropped the crate segment: {message}"
+    );
+}

@@ -6,7 +6,9 @@ use common::{
     isolated_workspace_with_serde, warm_cache,
 };
 use rstest::rstest;
+use rustdoc_mcp::DetailLevel;
 use rustdoc_mcp::index_metrics;
+use rustdoc_mcp::tools::inspect_item::{InspectItemRequest, handle_inspect_item};
 use rustdoc_mcp::tools::search::{SearchRequest, handle_search};
 
 /// Searching needs the term index, not the parsed docs behind it. Once the index
@@ -35,6 +37,79 @@ async fn warm_search_does_not_reparse_crate_docs(isolated_workspace: IsolatedWor
         parses_after_second == parses_after_first,
         "warm search re-parsed rustdoc JSON \
          (parses went from {parses_after_first} to {parses_after_second})"
+    );
+}
+
+/// An unqualified query fans out over every crate in the workspace. Crates whose
+/// index answers "no match" contribute nothing to render, so none of them should
+/// have their rustdoc JSON parsed just to reach that conclusion.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn fanout_does_not_parse_crates_without_matches(
+    isolated_workspace_with_serde: IsolatedWorkspace,
+) {
+    warm_cache(
+        &isolated_workspace_with_serde.state,
+        &["rustdoc-mcp", "serde", "serde_json", "serde_core"],
+    )
+    .await;
+
+    let restarted = isolated_workspace_with_serde.restart().await;
+    let parses_before = index_metrics::doc_parses();
+
+    let outcome = handle_inspect_item(
+        &restarted,
+        InspectItemRequest {
+            query: "qqqzzzxxxwvu".to_string(),
+            kind: None,
+            detail_level: DetailLevel::Low,
+        },
+    )
+    .await;
+
+    check!(outcome.is_err(), "expected no matches for a nonsense query");
+
+    let parsed = index_metrics::doc_parses() - parses_before;
+    check!(
+        parsed == 0,
+        "fan-out parsed {parsed} crates to answer a query no index matched"
+    );
+}
+
+/// An exact-name query resolves to items in one crate. Rendering is what forces a
+/// parse, so every other crate's low-relevance token hits must be discarded from
+/// the index alone, before anything is rendered.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn exact_name_query_parses_only_the_matching_crate(
+    isolated_workspace_with_serde: IsolatedWorkspace,
+) {
+    warm_cache(
+        &isolated_workspace_with_serde.state,
+        &["rustdoc-mcp", "serde", "serde_json", "serde_core"],
+    )
+    .await;
+
+    let restarted = isolated_workspace_with_serde.restart().await;
+    let parses_before = index_metrics::doc_parses();
+
+    let output = handle_inspect_item(
+        &restarted,
+        InspectItemRequest {
+            query: "QueryContext".to_string(),
+            kind: None,
+            detail_level: DetailLevel::Low,
+        },
+    )
+    .await
+    .expect("inspect_item after restart");
+
+    check!(output.contains("QueryContext"), "lost the result: {output}");
+
+    let parsed = index_metrics::doc_parses() - parses_before;
+    check!(
+        parsed == 1,
+        "parsed {parsed} crates to answer a name that exists in one"
     );
 }
 

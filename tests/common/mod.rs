@@ -189,6 +189,8 @@ impl Default for TempWorkspace {
 pub(crate) struct IsolatedWorkspace {
     workspace: TempWorkspace,
     pub(crate) state: Arc<DocState>,
+    metadata: WorkspaceContext,
+    cargo_lock: Option<PathBuf>,
 }
 
 #[allow(dead_code)] // Methods used across different integration test crates
@@ -294,17 +296,38 @@ impl IsolatedWorkspace {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 state
-                    .set_workspace(root.clone(), metadata, cargo_lock)
+                    .set_workspace(root.clone(), metadata.clone(), cargo_lock.clone())
                     .await;
             });
         });
 
-        Self { workspace, state }
+        Self {
+            workspace,
+            state,
+            metadata,
+            cargo_lock,
+        }
     }
 
     /// Returns the root path of this workspace.
     pub(crate) fn root(&self) -> &Path {
         self.workspace.path()
+    }
+
+    /// A second `DocState` over the same directory, with empty in-memory caches.
+    ///
+    /// Stands in for a server restart: whatever is on disk survives, everything
+    /// held in memory does not.
+    pub(crate) async fn restart(&self) -> Arc<DocState> {
+        let state = Arc::new(DocState::new(None));
+        state
+            .set_workspace(
+                self.workspace.path().to_path_buf(),
+                self.metadata.clone(),
+                self.cargo_lock.clone(),
+            )
+            .await;
+        state
     }
 }
 

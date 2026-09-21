@@ -16,6 +16,7 @@ use crate::format::renderers::{
     render_trait, render_type_alias,
 };
 use crate::item::ItemRef;
+use crate::search::index::SearchMatch;
 use crate::search::{
     DetailedSearchResult, ItemKind, QueryContext, TermIndex, item_kind_str, matches_kind,
     parse_item_path, resolve_crate_from_path, score_to_percent,
@@ -171,7 +172,11 @@ pub async fn handle_inspect_item_structured(
 
         let mut suggestions = Vec::new();
 
-        if let Some(item_ref) = query_ctx.resolve_path(&full_path, &mut suggestions) {
+        let resolved = query_ctx
+            .resolve_path(&full_path, &mut suggestions)
+            .or_else(|| query_ctx.resolve_definition_path(&full_path, request.kind));
+
+        if let Some(item_ref) = resolved {
             tracing::debug!(path = %full_path, "Resolved item via direct path lookup");
 
             if let Some(kind_filter) = request.kind
@@ -188,7 +193,9 @@ pub async fn handle_inspect_item_structured(
         }
     }
 
-    // Fall back to search-based resolution for non-path queries or queries without crate
+    // Fall back to search-based resolution for non-path queries or queries without crate.
+    // Crate-less on purpose: the crate segment would tokenize into the query and skew
+    // relevance. User-facing messages echo `request.query` instead.
     let search_query = path.full_path();
 
     let crates_to_search: Vec<CrateName> = if let Some(crate_name) = specified_crate {
@@ -203,21 +210,13 @@ pub async fn handle_inspect_item_structured(
         crates
     };
 
-    let mut all_results = Vec::new();
     let mut search_failures = Vec::new();
     let mut kind_filtered_kinds: Vec<String> = Vec::new();
+    let mut matches: Vec<SearchMatch> = Vec::new();
 
     const MAX_TOTAL_RESULTS: usize = 500;
 
     for crate_name in &crates_to_search {
-        if all_results.len() >= MAX_TOTAL_RESULTS {
-            tracing::debug!(
-                max_results = MAX_TOTAL_RESULTS,
-                "Reached maximum result limit, stopping search"
-            );
-            break;
-        }
-
         let index = match TermIndex::load_or_build(&query_ctx, crate_name.as_str()) {
             Ok(index) => index,
             Err(suggestions) => {
@@ -244,36 +243,54 @@ pub async fn handle_inspect_item_structured(
             }
         };
 
-        let remaining = MAX_TOTAL_RESULTS - all_results.len();
-        let limit = remaining.min(50);
+        matches.extend(index.search(&search_query, 50));
+    }
 
-        let search_results = index.search(&search_query, limit);
+    // Filter on names carried by the index, before anything is rendered. Rendering
+    // resolves an item, which parses its crate; a hit discarded afterwards has cost
+    // a parse for nothing, once per crate on an unqualified query.
+    let is_simple_name = !request.query.contains("::");
+    if is_simple_name && !matches.is_empty() {
+        let query_lower = request.query.to_lowercase();
+        if matches.iter().any(|m| m.name.to_lowercase() == query_lower) {
+            matches.retain(|m| m.name.to_lowercase() == query_lower);
+        } else if request.query.chars().any(char::is_uppercase)
+            || query_lower.chars().any(|c| c.is_ascii_digit())
+        {
+            // A specific-looking identifier that matched nothing by name: the
+            // remaining hits are partial-token noise.
+            matches.clear();
+        }
+    }
 
-        for search_result in search_results {
-            if let Some((item_ref, path_segments)) = query_ctx.get_item_from_id_path(
-                search_result.item.crate_name.as_str(),
-                &search_result.item.item_path,
-            ) {
-                if let Some(kind_filter) = request.kind
-                    && !matches_kind(item_ref.inner(), kind_filter)
-                {
-                    kind_filtered_kinds.push(item_kind_str(item_ref.inner()).to_string());
-                    continue;
-                }
+    matches.sort_by(|a, b| b.rank.total_cmp(&a.rank));
+    matches.truncate(MAX_TOTAL_RESULTS);
 
-                let result = DetailedSearchResult {
-                    name: item_ref.name().unwrap_or("<unnamed>").to_string(),
-                    path: path_segments.join("::"),
-                    kind: item_kind_str(item_ref.inner()).to_string(),
-                    crate_name: Some(search_result.item.crate_name.clone()),
-                    docs: item_ref.comment().map(std::string::ToString::to_string),
-                    id: Some(item_ref.id),
-                    relevance: score_to_percent(search_result.rank),
-                    source_crate: Some(crate_name.clone()),
-                };
-
-                all_results.push(result);
+    let mut all_results = Vec::new();
+    for search_result in matches {
+        let crate_name = search_result.item.crate_name.clone();
+        if let Some((item_ref, path_segments)) =
+            query_ctx.get_item_from_id_path(crate_name.as_str(), &search_result.item.item_path)
+        {
+            if let Some(kind_filter) = request.kind
+                && !matches_kind(item_ref.inner(), kind_filter)
+            {
+                kind_filtered_kinds.push(item_kind_str(item_ref.inner()).to_string());
+                continue;
             }
+
+            let result = DetailedSearchResult {
+                name: item_ref.name().unwrap_or("<unnamed>").to_string(),
+                path: path_segments.join("::"),
+                kind: item_kind_str(item_ref.inner()).to_string(),
+                crate_name: Some(crate_name.clone()),
+                docs: item_ref.comment().map(std::string::ToString::to_string),
+                id: Some(item_ref.id),
+                relevance: score_to_percent(search_result.rank),
+                source_crate: Some(crate_name),
+            };
+
+            all_results.push(result);
         }
     }
 
@@ -335,7 +352,7 @@ pub async fn handle_inspect_item_structured(
     if all_results.is_empty() {
         let mut error_msg = format!(
             "No items found matching '{}'{}",
-            search_query,
+            request.query,
             if let Some(k) = request.kind {
                 format!(" with kind '{k:?}'")
             } else {
@@ -350,7 +367,7 @@ pub async fn handle_inspect_item_structured(
             let _ = write!(
                 &mut error_msg,
                 "\nHowever, '{}' was found as: {}",
-                search_query,
+                request.query,
                 unique_kinds.join(", ")
             );
         }
@@ -384,7 +401,7 @@ pub async fn handle_inspect_item_structured(
     if all_results.len() > 1 {
         tracing::debug!(
             match_count = all_results.len(),
-            query = %search_query,
+            query = %request.query,
             "Multiple matches found, returning disambiguation"
         );
         let candidates = build_candidates(
@@ -394,7 +411,7 @@ pub async fn handle_inspect_item_structured(
                 .map(super::super::types::CrateName::as_str),
         );
         return Ok(StructuredInspectResult::Disambiguation {
-            query: search_query,
+            query: request.query,
             candidates,
         });
     }

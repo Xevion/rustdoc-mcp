@@ -73,7 +73,7 @@ const INDEX_MAGIC: [u8; 4] = *b"RDMI";
 ///
 /// postcard is not self-describing, so an older cache decodes without error into an
 /// index whose hashes match nothing, and every query silently misses.
-const INDEX_SCHEMA_VERSION: u32 = 2;
+const INDEX_SCHEMA_VERSION: u32 = 3;
 
 /// Magic, schema version, rustdoc JSON format, and the source digest.
 const INDEX_HEADER_LEN: usize = 20;
@@ -115,6 +115,11 @@ pub(crate) struct InvertedIndex {
     terms: HashMap<TermHash, Vec<(usize, f32)>>,
     /// Map from crate_index to id_path (sequence of u32 IDs from root to item)
     ids: Vec<Vec<u32>>,
+    /// Display name per document, parallel to `ids`.
+    ///
+    /// Carried in the index so a caller can discard non-matching hits without
+    /// parsing the crate they came from, which rendering would otherwise force.
+    names: Vec<String>,
 }
 
 impl InvertedIndex {
@@ -122,8 +127,9 @@ impl InvertedIndex {
     pub(super) const fn new(
         terms: HashMap<TermHash, Vec<(usize, f32)>>,
         ids: Vec<Vec<u32>>,
+        names: Vec<String>,
     ) -> Self {
-        Self { terms, ids }
+        Self { terms, ids, names }
     }
 
     /// Searches for items matching the query term using TF-IDF scoring.
@@ -137,7 +143,7 @@ impl InvertedIndex {
     /// factor derived from how many of the query's terms it matched, bounded
     /// below by [`COVERAGE_FLOOR`] so partial matches rank below full ones
     /// without disappearing.
-    pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<(Vec<u32>, f32)> {
+    pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<(Vec<u32>, f32, String)> {
         let stemmer = Stemmer::create(Algorithm::English);
         let tokens = tokenize_and_stem(query, &stemmer);
 
@@ -186,7 +192,13 @@ impl InvertedIndex {
         results
             .into_iter()
             .take(limit)
-            .map(|(doc_idx, score)| (self.ids[doc_idx].clone(), score))
+            .map(|(doc_idx, score)| {
+                (
+                    self.ids[doc_idx].clone(),
+                    score,
+                    self.names.get(doc_idx).cloned().unwrap_or_default(),
+                )
+            })
             .collect()
     }
 
@@ -213,6 +225,9 @@ pub(crate) struct ItemLocation {
 pub(crate) struct SearchMatch {
     pub item: ItemLocation,
     pub rank: f32,
+    /// The item's name, straight from the index, so callers can filter before
+    /// rendering forces the crate to be parsed.
+    pub name: String,
 }
 
 /// Detailed search result with full item information.
@@ -237,56 +252,63 @@ pub(crate) struct TermIndex {
 impl TermIndex {
     /// Loads a cached search index, building one only when the cache cannot serve it.
     ///
-    /// Invalidated when the rustdoc JSON is newer than the index, or the index came
-    /// from an incompatible version. Building ahead of the cache check would cost
-    /// what the cache exists to save, so it stays in the miss branch.
+    /// The crate is not parsed to answer a cache hit. A valid index already names the
+    /// exact JSON it was built from, so parsing that JSON again to prove the crate
+    /// exists costs what the cache exists to save, and on a fan-out query it costs it
+    /// once per crate.
     pub(crate) fn load_or_build<'a>(
         request: &'a super::query::QueryContext,
         crate_name: &str,
     ) -> Result<Self, Vec<super::query::PathSuggestion<'a>>> {
-        let mut suggestions = vec![];
-
-        // Use QueryContext::resolve_path for crate validation
-        let item = request
-            .resolve_path(crate_name, &mut suggestions)
-            .ok_or(suggestions)?;
-
-        let crate_name = CrateName::new_unchecked(item.crate_index().name());
-
+        // Keyed by the requested name throughout, so the lookup and the later store
+        // agree on one path. CrateName compares and hashes in normalized form.
+        let crate_name = CrateName::new_unchecked(crate_name);
         // Preloaded crates keep source in a read-only sysroot, cache in a writable dir.
         let index_path = request.index_cache_path(crate_name.as_str());
 
-        // block_on permits the non-Send ItemRef this future holds.
-        Ok(tokio::task::block_in_place(|| {
+        // block_on permits the non-Send ItemRef the build path holds.
+        let cached = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                let digest = request.source_digest_of(crate_name.as_str());
+                let digest = request.source_digest_of(crate_name.as_str())?;
                 let shared = request.shared();
 
                 // In memory from an earlier request: no disk read, no rebuild.
                 if let Some(shared) = shared
-                    && let Some(digest) = digest
                     && let Some(terms) = shared.get_index(&crate_name, digest).await
                 {
-                    return Self { crate_name, terms };
+                    return Some(terms);
                 }
 
-                if let Some(terms) = Self::load(&index_path, digest).await {
-                    metrics::record_load();
-                    tracing::debug!(
-                        crate_name = %crate_name,
-                        terms = terms.terms.len(),
-                        docs = terms.ids.len(),
-                        "Loaded cached search index"
-                    );
-                    let terms = Arc::new(terms);
-                    if let (Some(shared), Some(digest)) = (shared, digest) {
-                        shared
-                            .put_index(crate_name.clone(), digest, Arc::clone(&terms))
-                            .await;
-                    }
-                    return Self { crate_name, terms };
+                let terms = Self::load(&index_path, Some(digest)).await?;
+                metrics::record_load();
+                tracing::debug!(
+                    crate_name = %crate_name,
+                    terms = terms.terms.len(),
+                    docs = terms.ids.len(),
+                    "Loaded cached search index"
+                );
+                let terms = Arc::new(terms);
+                if let Some(shared) = shared {
+                    shared
+                        .put_index(crate_name.clone(), digest, Arc::clone(&terms))
+                        .await;
                 }
+                Some(terms)
+            })
+        });
 
+        if let Some(terms) = cached {
+            return Ok(Self { crate_name, terms });
+        }
+
+        // Only now is a parsed crate needed, both to validate the name and to walk.
+        let mut suggestions = vec![];
+        let item = request
+            .resolve_path(crate_name.as_str(), &mut suggestions)
+            .ok_or(suggestions)?;
+
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
                 let start = std::time::Instant::now();
                 tracing::info!(crate_name = %crate_name, "Building search index");
                 metrics::record_build();
@@ -299,9 +321,12 @@ impl TermIndex {
                 }
 
                 let terms = Arc::new(terms);
-                if let (Some(shared), Some(digest)) = (shared, digest) {
+                // Keyed by what the index was built from, matching the on-disk stamp.
+                if let Some(shared) = request.shared()
+                    && built_from != 0
+                {
                     shared
-                        .put_index(crate_name.clone(), digest, Arc::clone(&terms))
+                        .put_index(crate_name.clone(), built_from, Arc::clone(&terms))
                         .await;
                 }
                 Self { crate_name, terms }
@@ -314,12 +339,13 @@ impl TermIndex {
         self.terms
             .search(query, limit)
             .into_iter()
-            .map(|(item_path, rank)| SearchMatch {
+            .map(|(item_path, rank, name)| SearchMatch {
                 item: ItemLocation {
                     crate_name: self.crate_name.clone(),
                     item_path,
                 },
                 rank,
+                name,
             })
             .collect()
     }
@@ -448,7 +474,8 @@ mod tests {
         let ids: Vec<Vec<u32>> = (0..doc_count)
             .map(|i| vec![u32::try_from(i).expect("test doc_count fits in u32")])
             .collect();
-        InvertedIndex::new(terms, ids)
+        let names = vec![String::new(); doc_count];
+        InvertedIndex::new(terms, ids, names)
     }
 
     /// Stem a single word using the same stemmer the index uses.

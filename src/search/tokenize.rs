@@ -37,6 +37,8 @@ pub(crate) struct TermBuilder {
     shortest_paths: HashMap<DocId, Vec<u32>>,
     /// Map from doc_id to document length (total term count for normalization)
     doc_lengths: HashMap<DocId, usize>,
+    /// Map from doc_id to the item's display name, for filtering without the docs
+    names: HashMap<DocId, String>,
     /// Reusable stemmer instance for English language stemming
     stemmer: Stemmer,
 }
@@ -47,6 +49,7 @@ impl Default for TermBuilder {
             term_docs: HashMap::default(),
             shortest_paths: HashMap::default(),
             doc_lengths: HashMap::default(),
+            names: HashMap::default(),
             stemmer: Stemmer::create(Algorithm::English),
         }
     }
@@ -105,10 +108,12 @@ impl TermBuilder {
         // Build id_set mapping from doc_id to array index
         let mut id_set: HashMap<DocId, usize> = HashMap::new();
         let mut ids: Vec<Vec<u32>> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
 
         for (doc_id, path) in sorted_paths {
             let index = ids.len();
             ids.push(path);
+            names.push(self.names.get(&doc_id).cloned().unwrap_or_default());
             id_set.insert(doc_id, index);
         }
 
@@ -151,7 +156,7 @@ impl TermBuilder {
             terms.insert(term_hash, tf_idf_scores);
         }
 
-        let index = InvertedIndex::new(terms, ids);
+        let index = InvertedIndex::new(terms, ids, names);
 
         tracing::info!(
             "Built search index: {} unique terms, {} documents, {} term-document pairs in {:?}",
@@ -187,6 +192,7 @@ impl TermBuilder {
         // Index name with higher weight (base_score: 2.0)
         if let Some(name) = item.name() {
             self.add_terms(name, doc_id, 2.0);
+            self.names.entry(doc_id).or_insert_with(|| name.to_string());
         }
 
         // Index documentation with lower weight (base_score: 1.0)
@@ -247,6 +253,9 @@ impl TermBuilder {
 
         // Index the re-export name (e.g., "Serialize" from `pub use serde_core::Serialize`)
         self.add_terms(&use_item.name, doc_id, 2.0);
+        self.names
+            .entry(doc_id)
+            .or_insert_with(|| use_item.name.clone());
 
         // Try to resolve the target to get its documentation
         let target = use_item
