@@ -473,3 +473,154 @@ async fn failed_path_query_echoes_the_full_query(isolated_workspace: IsolatedWor
         "error dropped the crate segment: {message}"
     );
 }
+
+/// Paths the tool itself prints have to be accepted back, in either crate spelling
+/// and whether or not the module chain is public.
+#[rstest]
+#[case("rustdoc_mcp::search::query::QueryContext", "QueryContext")]
+#[case("rustdoc-mcp::search::query::QueryContext", "QueryContext")]
+#[case("rustdoc_mcp::search::QueryContext", "QueryContext")]
+#[case("rustdoc_mcp::QueryContext", "QueryContext")]
+#[case("rustdoc_mcp::item::iterator::TraitIterator", "TraitIterator")]
+#[case("rustdoc_mcp::item::iterator::MethodIterator", "MethodIterator")]
+#[case("rustdoc_mcp::types::CrateName", "CrateName")]
+#[case("rustdoc_mcp::workspace::CrateOrigin", "CrateOrigin")]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_resolves_path(
+    #[case] query: &str,
+    #[case] expected: &str,
+    isolated_workspace: IsolatedWorkspace,
+) {
+    let request = InspectItemRequest {
+        query: query.to_string(),
+        kind: None,
+        detail_level: DetailLevel::Low,
+    };
+
+    assert!(let Ok(output) = handle_inspect_item(&isolated_workspace.state, request).await);
+    check!(
+        !output.contains("Multiple items found"),
+        "'{query}' fell through to fuzzy matching: {output}"
+    );
+    check!(
+        output.contains(expected),
+        "'{query}' resolved wrong: {output}"
+    );
+}
+
+/// A name nothing defines should say so. Returning unrelated items because a
+/// stemmed fragment matched somewhere sends the reader off after the wrong thing.
+#[rstest]
+#[case("nonexistent_symbol_qqqzzz")]
+#[case("zzz_no_such_thing_anywhere")]
+#[case("QqqZzzNotAType")]
+#[case("qqqzzz123")]
+#[case("totally_made_up_name")]
+#[case("rustdoc_mcp::nowhere::QqqZzz")]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_reports_nothing_for_unknown_names(
+    #[case] query: &str,
+    isolated_workspace: IsolatedWorkspace,
+) {
+    let outcome = handle_inspect_item(
+        &isolated_workspace.state,
+        InspectItemRequest {
+            query: query.to_string(),
+            kind: None,
+            detail_level: DetailLevel::Low,
+        },
+    )
+    .await;
+
+    check!(
+        outcome.is_err(),
+        "'{query}' returned items: {}",
+        outcome.unwrap_or_default()
+    );
+}
+
+/// Degenerate queries must not panic, and must not claim to have resolved anything.
+#[rstest]
+#[case("")]
+#[case("   ")]
+#[case("::")]
+#[case("::::")]
+#[case("::QueryContext")]
+#[case("QueryContext::")]
+#[case("rustdoc_mcp::")]
+#[case("a::b::c::d::e::f::g::h")]
+#[case("\u{5f15}\u{6570}")]
+#[case("-")]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_survives_degenerate_input(
+    #[case] query: &str,
+    isolated_workspace: IsolatedWorkspace,
+) {
+    let _ = handle_inspect_item(
+        &isolated_workspace.state,
+        InspectItemRequest {
+            query: query.to_string(),
+            kind: None,
+            detail_level: DetailLevel::Low,
+        },
+    )
+    .await;
+}
+
+/// A kind filter must not turn a correct resolution into a wrong one.
+#[rstest]
+#[case("QueryContext", ItemKind::Struct, true)]
+#[case("QueryContext", ItemKind::Trait, false)]
+#[case("CrateOrigin", ItemKind::Enum, true)]
+#[case("CrateOrigin", ItemKind::Struct, false)]
+#[tokio::test(flavor = "multi_thread")]
+async fn inspect_honours_kind_filter(
+    #[case] query: &str,
+    #[case] kind: ItemKind,
+    #[case] should_resolve: bool,
+    isolated_workspace: IsolatedWorkspace,
+) {
+    let outcome = handle_inspect_item(
+        &isolated_workspace.state,
+        InspectItemRequest {
+            query: query.to_string(),
+            kind: Some(kind),
+            detail_level: DetailLevel::Low,
+        },
+    )
+    .await;
+
+    check!(
+        outcome.is_ok() == should_resolve,
+        "'{query}' as {kind:?}: expected resolve={should_resolve}, got {outcome:?}"
+    );
+}
+
+/// With several crates in range, an unknown name has more chances to collide with
+/// a stemmed fragment somewhere. The answer is still that nothing was found.
+#[rstest]
+#[case("nonexistent_symbol_qqqzzz")]
+#[case("zzz_no_such_thing_anywhere")]
+#[case("totally_made_up_name")]
+#[case("serialize_qqqzzz_nothing")]
+#[tokio::test(flavor = "multi_thread")]
+async fn fanout_reports_nothing_for_unknown_names(
+    #[case] query: &str,
+    isolated_workspace_with_serde: IsolatedWorkspace,
+) {
+    let outcome = handle_inspect_item(
+        &isolated_workspace_with_serde.state,
+        InspectItemRequest {
+            query: query.to_string(),
+            kind: None,
+            detail_level: DetailLevel::Low,
+        },
+    )
+    .await;
+
+    check!(
+        outcome.is_err(),
+        "'{query}' returned items: {}",
+        outcome.unwrap_or_default()
+    );
+}

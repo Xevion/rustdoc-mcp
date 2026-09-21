@@ -495,3 +495,42 @@ pub(crate) async fn warm_cache(state: &Arc<DocState>, crates: &[&str]) {
         .await;
     }
 }
+
+/// Names of the items a `search` response actually listed.
+///
+/// The response header echoes the query, so a plain `contains` check on the whole
+/// body passes whenever the query string appears anywhere, including when nothing
+/// was found. Only the numbered result lines count as hits.
+#[allow(dead_code)]
+pub(crate) fn search_result_names(output: &str) -> Vec<String> {
+    result_paths(output, '`')
+        .into_iter()
+        .filter_map(|path| path.rsplit("::").next().map(str::to_string))
+        .collect()
+}
+
+/// Item paths listed by a `search` or disambiguation response.
+#[allow(dead_code)]
+pub(crate) fn result_paths(output: &str, delimiter: char) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            if !line.starts_with(|c: char| c.is_ascii_digit()) {
+                return None;
+            }
+            let rest = line.split_once(". ")?.1;
+            if delimiter == '`' {
+                rest.split('`').nth(1).map(str::to_string)
+            } else {
+                rest.split_whitespace().next().map(str::to_string)
+            }
+        })
+        .collect()
+}
+
+/// Item paths listed by an `inspect_item` disambiguation response.
+#[allow(dead_code)]
+pub(crate) fn candidate_paths(output: &str) -> Vec<String> {
+    result_paths(output, ' ')
+}

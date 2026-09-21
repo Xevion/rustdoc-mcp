@@ -27,6 +27,7 @@
 //! giving local contributors a documented opt-out.
 
 use assert2::check;
+use rstest::rstest;
 use rustdoc_mcp::index_metrics;
 use rustdoc_mcp::stdlib::StdlibDocs;
 use rustdoc_mcp::tools::inspect_item::{
@@ -237,5 +238,111 @@ async fn warm_cache_writes_to_isolated_dir() {
         builds_after_warm == builds_after_cold,
         "warm call rebuilt the index despite loading it from cache \
          (builds went from {builds_after_cold} to {builds_after_warm})"
+    );
+}
+
+/// Every hit a stdlib search reports must be renderable. An unresolvable hit is
+/// worse than no hit: it occupies a result slot and tells the reader nothing.
+#[rstest]
+#[case("std", "BTreeMap")]
+#[case("std", "HashMap")]
+#[case("std", "Vec")]
+#[case("core", "Option")]
+#[tokio::test(flavor = "multi_thread")]
+async fn stdlib_search_hits_all_resolve(#[case] crate_name: &str, #[case] query: &str) {
+    let Some((state, _cache)) = isolated_stdlib_state() else {
+        return;
+    };
+
+    let result = handle_search_structured(
+        &state,
+        SearchRequest {
+            query: query.to_string(),
+            crate_name: crate_name.to_string(),
+            limit: 5,
+        },
+    )
+    .await
+    .expect("stdlib search should succeed");
+
+    let StructuredSearchResult::Hits { hits, .. } = result else {
+        panic!("expected hits for '{query}' in {crate_name}, got {result:?}");
+    };
+
+    let unresolved: Vec<&str> = hits
+        .iter()
+        .filter(|hit| hit.full_path.contains("Unable to resolve") || hit.kind == "Unknown")
+        .map(|hit| hit.full_path.as_str())
+        .collect();
+
+    check!(
+        unresolved.is_empty(),
+        "'{query}' in {crate_name} returned unresolvable hits: {unresolved:?}"
+    );
+}
+
+/// Types std re-exports from another sysroot crate are still std types to a
+/// caller, and a path query naming them should resolve.
+#[rstest]
+#[case("std::collections::HashMap")]
+#[case("std::collections::BTreeMap")]
+#[case("std::vec::Vec")]
+#[case("core::option::Option")]
+#[tokio::test(flavor = "multi_thread")]
+async fn stdlib_path_queries_resolve(#[case] query: &str) {
+    let Some((state, _cache)) = isolated_stdlib_state() else {
+        return;
+    };
+
+    let result = handle_inspect_item_structured(
+        &state,
+        InspectItemRequest {
+            query: query.to_string(),
+            kind: None,
+            detail_level: DetailLevel::Low,
+        },
+    )
+    .await;
+
+    check!(result.is_ok(), "'{query}' failed to resolve: {result:?}");
+}
+
+/// Types `std` re-exports from `alloc` are still not findable by name in `std`.
+///
+/// `std`'s rustdoc JSON contains no entry for them at all: its `collections` module
+/// lists child ids that are absent from its own item map, and only its path table
+/// records them, tagged with the crate that defines them. A path query resolves
+/// through that table, but a name search has nothing in the index to match.
+///
+/// Ignored rather than deleted so the gap stays stated.
+#[rstest]
+#[case("std", "BTreeMap")]
+#[case("std", "Vec")]
+#[ignore = "std re-exports from alloc are absent from std's item map"]
+#[tokio::test(flavor = "multi_thread")]
+async fn stdlib_search_finds_reexported_type(#[case] crate_name: &str, #[case] query: &str) {
+    let Some((state, _cache)) = isolated_stdlib_state() else {
+        return;
+    };
+
+    let result = handle_search_structured(
+        &state,
+        SearchRequest {
+            query: query.to_string(),
+            crate_name: crate_name.to_string(),
+            limit: 10,
+        },
+    )
+    .await
+    .expect("stdlib search should succeed");
+
+    let StructuredSearchResult::Hits { hits, .. } = result else {
+        panic!("expected hits for '{query}' in {crate_name}");
+    };
+
+    check!(
+        hits.iter().any(|hit| hit.full_path.ends_with(query)),
+        "'{query}' not among {:?}",
+        hits.iter().map(|h| &h.full_path).collect::<Vec<_>>()
     );
 }

@@ -510,6 +510,15 @@ impl QueryContext {
         path: &str,
         kind: Option<crate::search::ItemKind>,
     ) -> Option<ItemRef<'a, Item>> {
+        self.resolve_definition_path_inner(path, kind, true)
+    }
+
+    fn resolve_definition_path_inner<'a>(
+        &'a self,
+        path: &str,
+        kind: Option<crate::search::ItemKind>,
+        follow_foreign: bool,
+    ) -> Option<ItemRef<'a, Item>> {
         let (crate_name, _) = path
             .find("::")
             .map_or((path, None), |i| (&path[..i], Some(i + 2)));
@@ -557,7 +566,36 @@ impl QueryContext {
             matched = Some(*id);
         }
 
-        self.get_item(crate_index, matched?)
+        if let Some(id) = matched {
+            return self.get_item(crate_index, id);
+        }
+        if !follow_foreign {
+            return None;
+        }
+
+        // The crate names the item but another crate defines it. A path table records
+        // such an item under its defining path, tagged with the crate that owns it,
+        // which is the only trace std leaves of what it re-exports from alloc.
+        let tail = *wanted.last()?;
+        let mut foreign: Option<String> = None;
+        for summary in crate_index.paths().values() {
+            if summary.crate_id == 0 || summary.path.last().map(String::as_str) != Some(tail) {
+                continue;
+            }
+            if !is_subsequence(&wanted[1..], &summary.path) {
+                continue;
+            }
+            let Some(defining) = crate_index.external_crate_name(summary.crate_id) else {
+                continue;
+            };
+            let candidate = format!("{defining}::{}", summary.path[1..].join("::"));
+            if foreign.as_ref().is_some_and(|found| *found != candidate) {
+                return None;
+            }
+            foreign = Some(candidate);
+        }
+
+        self.resolve_definition_path_inner(&foreign?, kind, false)
     }
 
     /// Load a crate, discovering it from existing doc files if not in known crates.
@@ -700,9 +738,13 @@ impl QueryContext {
             // Handle re-exports
             if let ItemEnum::Use(use_item) = item.inner() {
                 if let Some(target_id) = use_item.id {
+                    // A re-export can name a target in another crate, whose own
+                    // module chain may be non-public there. std pulling Vec and
+                    // BTreeMap out of alloc is the common case.
                     item = item
                         .get(target_id)
-                        .or_else(|| self.resolve_path(&use_item.source, &mut vec![]))?;
+                        .or_else(|| self.resolve_path(&use_item.source, &mut vec![]))
+                        .or_else(|| self.resolve_definition_path(&use_item.source, None))?;
                 }
 
                 if !use_item.is_glob {
@@ -725,6 +767,17 @@ impl Drop for QueryContext {
             self.doc_cache.borrow().len()
         );
     }
+}
+
+/// Whether every segment of `needle` appears in `haystack`, in order.
+///
+/// A re-export names an item by a shorter path than the one defining it, so
+/// `collections::BTreeMap` must be recognised inside `collections::btree::map::BTreeMap`.
+fn is_subsequence(needle: &[&str], haystack: &[String]) -> bool {
+    let mut segments = haystack.iter();
+    needle
+        .iter()
+        .all(|want| segments.any(|segment| segment == want))
 }
 
 /// A fuzzy path suggestion with relevance score.

@@ -8,7 +8,7 @@
 use crate::item::ItemRef;
 use ahash::AHashMap;
 use rust_stemmers::{Algorithm, Stemmer};
-use rustdoc_types::{Item, ItemEnum};
+use rustdoc_types::{Id, Item, ItemEnum};
 use std::collections::HashMap;
 
 use super::index::InvertedIndex;
@@ -223,6 +223,41 @@ impl TermBuilder {
         }
     }
 
+    /// Index items that the module walk cannot reach.
+    ///
+    /// rustdoc leaves a non-public module's contents out of its parent's item list,
+    /// so a public type inside one is invisible to a walk of those lists unless some
+    /// re-export happens to expose it. Such an item is still in the crate's item map,
+    /// and is still what a reader means when they search for its name.
+    ///
+    /// These get a single-element id path. There is no chain of public modules to
+    /// record, and the crate's path table supplies the display path.
+    pub(crate) fn index_unreachable(&mut self, root: ItemRef<'_, Item>) {
+        let crate_index = root.crate_index();
+        let crate_id = u64::from(crate_index.root().0);
+
+        let pending: Vec<(Id, &str, Option<&str>)> = crate_index
+            .items()
+            .iter()
+            .filter(|(id, _)| !self.shortest_paths.contains_key(&(crate_id, id.0)))
+            .filter_map(|(id, item)| {
+                item.name
+                    .as_deref()
+                    .map(|name| (*id, name, item.docs.as_deref()))
+            })
+            .collect();
+
+        for (id, name, docs) in pending {
+            let doc_id = (crate_id, id.0);
+            self.shortest_paths.insert(doc_id, vec![id.0]);
+            self.names.entry(doc_id).or_insert_with(|| name.to_string());
+            self.add_terms(name, doc_id, 2.0);
+            if let Some(docs) = docs {
+                self.add_terms(docs, doc_id, 1.0);
+            }
+        }
+    }
+
     /// Index a re-export item under its public name.
     ///
     /// This ensures that `pub use other::Thing` makes `Thing` searchable
@@ -393,6 +428,55 @@ mod tests {
     fn hash_term_is_stable_across_processes() {
         check!(hash_term("QueryContext") == 4_388_243_129_022_353_635);
         check!(hash_term("cache") == 3_196_654_445_509_280_238);
+    }
+
+    /// Tokenizing runs over whatever a user types and over every doc comment in a
+    /// crate, so it has to terminate and stay in bounds on input that is not an
+    /// identifier at all.
+    #[rstest]
+    #[case("")]
+    #[case("   ")]
+    #[case("::")]
+    #[case("_____")]
+    #[case("-----")]
+    #[case("123456")]
+    #[case("\u{5f15}\u{6570}\u{306e}\u{578b}")]
+    #[case("\u{e9}l\u{e8}ve_caf\u{e9}")]
+    #[case("\u{1f600}\u{1f680}")]
+    #[case("aAbBcCdDeEfFgG")]
+    #[case("HTTPSConnection")]
+    #[case("XMLHttpRequest2Factory")]
+    fn tokenize_handles_non_identifier_input(#[case] input: &str) {
+        let stemmer = Stemmer::create(Algorithm::English);
+        let tokens = tokenize_and_stem(input, &stemmer);
+        for token in &tokens {
+            check!(!token.is_empty(), "produced an empty token from {input:?}");
+            check!(
+                input.to_lowercase().contains(token.as_str()) || token.len() <= input.len(),
+                "token {token:?} is not derived from {input:?}"
+            );
+        }
+    }
+
+    /// A very long run of case transitions is the worst case for the boundary
+    /// state machine, which builds a token per transition plus the whole word.
+    #[test]
+    fn tokenize_terminates_on_pathological_input() {
+        let stemmer = Stemmer::create(Algorithm::English);
+        let input = "aB".repeat(5_000);
+        let tokens = tokenize_and_stem(&input, &stemmer);
+        check!(!tokens.is_empty());
+    }
+
+    /// Hashes are written into on-disk index files, so a change to any of these
+    /// values silently invalidates every cache in existence.
+    #[rstest]
+    #[case("QueryContext", 4_388_243_129_022_353_635)]
+    #[case("cache", 3_196_654_445_509_280_238)]
+    #[case("", 3_244_421_341_483_603_138)]
+    #[case("QUERYCONTEXT", 4_388_243_129_022_353_635)]
+    fn hash_term_matches_pinned_values(#[case] term: &str, #[case] expected: u64) {
+        check!(hash_term(term) == expected);
     }
 
     #[rstest]

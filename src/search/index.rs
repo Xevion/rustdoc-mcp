@@ -73,7 +73,7 @@ const INDEX_MAGIC: [u8; 4] = *b"RDMI";
 ///
 /// postcard is not self-describing, so an older cache decodes without error into an
 /// index whose hashes match nothing, and every query silently misses.
-const INDEX_SCHEMA_VERSION: u32 = 3;
+const INDEX_SCHEMA_VERSION: u32 = 4;
 
 /// Magic, schema version, rustdoc JSON format, and the source digest.
 const INDEX_HEADER_LEN: usize = 20;
@@ -185,9 +185,22 @@ impl InvertedIndex {
             }
         }
 
-        // Sort by combined score descending
+        // An item whose name is exactly what was asked for outranks anything that
+        // merely mentions it. Short documents normalize to high TF-IDF, so without
+        // this a type is buried under its own iterators and helper functions.
+        let exact = query.trim();
+        let is_exact = |doc_idx: usize| {
+            self.names
+                .get(doc_idx)
+                .is_some_and(|name| name.eq_ignore_ascii_case(exact))
+        };
+
         let mut results: Vec<_> = combined_scores.into_iter().collect();
-        results.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+        results.sort_by(|(a_idx, a), (b_idx, b)| {
+            is_exact(*b_idx)
+                .cmp(&is_exact(*a_idx))
+                .then_with(|| b.total_cmp(a))
+        });
 
         results
             .into_iter()
@@ -448,6 +461,7 @@ fn build_index(root_item: ItemRef<'_, Item>) -> (InvertedIndex, u64) {
     let built_from = root_item.crate_index().source_digest();
     let mut builder = TermBuilder::default();
     builder.recurse(root_item, &[], false);
+    builder.index_unreachable(root_item);
     (builder.finalize(), built_from)
 }
 
@@ -455,6 +469,7 @@ fn build_index(root_item: ItemRef<'_, Item>) -> (InvertedIndex, u64) {
 mod tests {
     use super::*;
     use assert2::check;
+    use rstest::rstest;
 
     /// Build a minimal InvertedIndex directly from (token, doc_idx, score) triples.
     /// Useful for testing scoring behavior without a real crate loaded.
@@ -618,6 +633,49 @@ mod tests {
 
         check!(loaded.is_none());
         check!(!index_path.exists());
+    }
+
+    /// A cache file can be truncated, empty, or garbage after a crash or a partial
+    /// write. None of those may be trusted, and none may be left in place to be
+    /// re-read on every later query.
+    #[rstest]
+    #[case::empty(vec![])]
+    #[case::shorter_than_header(vec![b'R', b'D'])]
+    #[case::header_only(index_header(0).to_vec())]
+    #[case::header_then_garbage({
+        let mut bytes = index_header(0).to_vec();
+        bytes.extend_from_slice(&[0xff; 64]);
+        bytes
+    })]
+    #[case::wrong_magic({
+        let mut bytes = index_header(0).to_vec();
+        bytes[0..4].copy_from_slice(b"XXXX");
+        bytes
+    })]
+    #[case::future_schema({
+        let mut bytes = index_header(0).to_vec();
+        bytes[4..8].copy_from_slice(&(INDEX_SCHEMA_VERSION + 1).to_le_bytes());
+        bytes
+    })]
+    #[case::wrong_format_version({
+        let mut bytes = index_header(0).to_vec();
+        bytes[8..12].copy_from_slice(&(rustdoc_types::FORMAT_VERSION + 1).to_le_bytes());
+        bytes
+    })]
+    #[tokio::test]
+    async fn damaged_cache_is_rejected_and_removed(#[case] bytes: Vec<u8>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("demo.json");
+        std::fs::write(&source, b"{}").expect("write source");
+        let digest = source_digest(&source).expect("digest");
+
+        let index_path = dir.path().join("demo.index");
+        std::fs::write(&index_path, &bytes).expect("write index");
+
+        let loaded = TermIndex::load(&index_path, Some(digest)).await;
+
+        check!(loaded.is_none());
+        check!(!index_path.exists(), "a rejected cache was left on disk");
     }
 
     /// The header must not break the case it guards: this build reads its own index.

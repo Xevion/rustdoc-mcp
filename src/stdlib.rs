@@ -334,12 +334,38 @@ impl StdlibDocs {
             },
         );
 
+        // `std` re-exports much of its surface from `alloc` (Vec, String, BTreeMap,
+        // and friends), and resolving one of those needs the defining crate loaded.
+        // `core` is deliberately not preloaded: it is an order of magnitude larger
+        // and would stay resident for the process lifetime after a single query.
+        for sibling in SIBLING_CRATES {
+            let key = CrateName::new_unchecked(*sibling);
+            if preloaded.contains_key(&key) {
+                continue;
+            }
+            let Ok(index) = self.load(sibling).await else {
+                continue;
+            };
+            preloaded.insert(
+                key,
+                PreloadedCrate {
+                    index,
+                    source_path: self.doc_path(sibling),
+                    index_cache_path: self.index_cache_path(sibling),
+                },
+            );
+        }
+
         Ok(QueryContext::with_preloaded(
             Arc::new(stdlib_ctx),
             preloaded,
         ))
     }
 }
+
+/// Sysroot crates loaded alongside whichever stdlib crate was asked for, so that
+/// re-exported items resolve to where they are defined.
+const SIBLING_CRATES: &[&str] = &["alloc"];
 
 #[cfg(test)]
 mod tests {

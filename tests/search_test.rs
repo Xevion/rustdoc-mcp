@@ -3,7 +3,7 @@ mod common;
 use assert2::{assert, check};
 use common::{
     IsolatedWorkspace, isolated_workspace, isolated_workspace_with_anyhow,
-    isolated_workspace_with_serde, warm_cache,
+    isolated_workspace_with_serde, search_result_names, warm_cache,
 };
 use rstest::rstest;
 use rustdoc_mcp::DetailLevel;
@@ -693,4 +693,132 @@ async fn search_finds_anyhow_result(isolated_workspace_with_anyhow: IsolatedWork
         "Should find Result type alias in anyhow results: {}",
         output
     );
+}
+
+/// Every public type should be reachable by its own name. Items whose module is
+/// not public are absent from rustdoc's module listings, so an index built by
+/// walking those listings can only see what a public re-export happens to expose.
+#[rstest]
+#[case("QueryContext")]
+#[case("TypeFormatter")]
+#[case("CrateOrigin")]
+#[case("CrateName")]
+#[case("TraitIterator")]
+#[case("MethodIterator")]
+#[case("ChildrenBuilder")]
+#[case("ChildIterator")]
+#[case("ItemRef")]
+#[tokio::test(flavor = "multi_thread")]
+async fn search_finds_type_by_name(#[case] name: &str, isolated_workspace: IsolatedWorkspace) {
+    let output = handle_search(
+        &isolated_workspace.state,
+        SearchRequest {
+            query: name.to_string(),
+            crate_name: "rustdoc-mcp".to_string(),
+            limit: 20,
+        },
+    )
+    .await
+    .expect("search should succeed");
+
+    let names = search_result_names(&output);
+    check!(
+        names.iter().any(|found| found == name),
+        "'{name}' missing from results: {names:?}"
+    );
+}
+
+/// Queries are lowercased before hashing, so case should not decide whether an
+/// item is findable.
+#[rstest]
+#[case("QueryContext")]
+#[case("querycontext")]
+#[case("QUERYCONTEXT")]
+#[case("queryContext")]
+#[tokio::test(flavor = "multi_thread")]
+async fn search_is_case_insensitive(#[case] query: &str, isolated_workspace: IsolatedWorkspace) {
+    let output = handle_search(
+        &isolated_workspace.state,
+        SearchRequest {
+            query: query.to_string(),
+            crate_name: "rustdoc-mcp".to_string(),
+            limit: 10,
+        },
+    )
+    .await
+    .expect("search should succeed");
+
+    check!(
+        search_result_names(&output)
+            .iter()
+            .any(|n| n == "QueryContext"),
+        "'{query}' did not find QueryContext"
+    );
+}
+
+/// Cargo accepts a crate by either spelling, and both name the same crate.
+#[rstest]
+#[case("rustdoc-mcp")]
+#[case("rustdoc_mcp")]
+#[tokio::test(flavor = "multi_thread")]
+async fn search_accepts_either_crate_name_spelling(
+    #[case] crate_name: &str,
+    isolated_workspace: IsolatedWorkspace,
+) {
+    let output = handle_search(
+        &isolated_workspace.state,
+        SearchRequest {
+            query: "QueryContext".to_string(),
+            crate_name: crate_name.to_string(),
+            limit: 5,
+        },
+    )
+    .await
+    .expect("search should succeed");
+
+    check!(
+        search_result_names(&output)
+            .iter()
+            .any(|n| n == "QueryContext"),
+        "crate spelled '{crate_name}' found nothing"
+    );
+}
+
+/// Degenerate queries and limits must not panic or return more than asked for.
+#[rstest]
+#[case("", 10)]
+#[case("   ", 10)]
+#[case("::", 10)]
+#[case("::QueryContext", 10)]
+#[case("QueryContext::", 10)]
+#[case("a::b::c::d::e::f::g", 10)]
+#[case("QueryContext QueryContext QueryContext", 10)]
+#[case("QueryContext", 0)]
+#[case("QueryContext", 1)]
+#[case("QueryContext", usize::MAX)]
+#[case("\u{5f15}\u{6570}", 10)]
+#[case("-", 10)]
+#[case("________", 10)]
+#[tokio::test(flavor = "multi_thread")]
+async fn search_survives_degenerate_input(
+    #[case] query: &str,
+    #[case] limit: usize,
+    isolated_workspace: IsolatedWorkspace,
+) {
+    let outcome = handle_search(
+        &isolated_workspace.state,
+        SearchRequest {
+            query: query.to_string(),
+            crate_name: "rustdoc-mcp".to_string(),
+            limit,
+        },
+    )
+    .await;
+
+    if let Ok(output) = outcome {
+        check!(
+            search_result_names(&output).len() <= limit,
+            "returned more than the requested limit of {limit}"
+        );
+    }
 }

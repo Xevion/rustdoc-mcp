@@ -206,32 +206,42 @@ fn run_search(
     }
 
     let max_score = matches.first().map_or(1.0, |r| r.rank);
+    // A hit that cannot be resolved cannot be shown. Emitting a placeholder row for
+    // it spends a result slot on something the reader can neither read nor look up.
     let hits: Vec<StructuredSearchHit> = matches
         .iter()
-        .map(|m| {
+        .filter_map(|m| {
             let relevance = score_to_percent(m.rank / max_score);
-            match query_ctx.get_item_from_id_path(m.item.crate_name.as_str(), &m.item.item_path) {
-                Some((item, path_segments)) => {
-                    let full_path = path_segments.join("::");
-                    let kind = format!("{:?}", item.kind());
-                    let first_doc_line = item.comment().and_then(|docs| {
-                        docs.lines()
-                            .find(|line| !line.trim().is_empty())
-                            .map(|line| line.trim().to_string())
-                    });
-                    StructuredSearchHit {
-                        full_path,
-                        kind,
-                        relevance,
-                        first_doc_line,
-                    }
-                }
-                None => StructuredSearchHit {
-                    full_path: "[Unable to resolve item]".to_string(),
-                    kind: "Unknown".to_string(),
+            if let Some((item, path_segments)) =
+                query_ctx.get_item_from_id_path(m.item.crate_name.as_str(), &m.item.item_path)
+            {
+                // A single-element id path means the item was indexed directly
+                // rather than reached through modules, so there are no route
+                // segments to show and the crate's path table knows where it is.
+                let full_path = if m.item.item_path.len() > 1 {
+                    path_segments.join("::")
+                } else {
+                    item.path_string()
+                        .unwrap_or_else(|| path_segments.join("::"))
+                };
+                let kind = format!("{:?}", item.kind());
+                let first_doc_line = item.comment().and_then(|docs| {
+                    docs.lines()
+                        .find(|line| !line.trim().is_empty())
+                        .map(|line| line.trim().to_string())
+                });
+                Some(StructuredSearchHit {
+                    full_path,
+                    kind,
                     relevance,
-                    first_doc_line: None,
-                },
+                    first_doc_line,
+                })
+            } else {
+                tracing::debug!(
+                    crate_name = %m.item.crate_name,
+                    "Dropping a search hit that could not be resolved"
+                );
+                None
             }
         })
         .collect();

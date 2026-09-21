@@ -254,11 +254,10 @@ pub async fn handle_inspect_item_structured(
         let query_lower = request.query.to_lowercase();
         if matches.iter().any(|m| m.name.to_lowercase() == query_lower) {
             matches.retain(|m| m.name.to_lowercase() == query_lower);
-        } else if request.query.chars().any(char::is_uppercase)
-            || query_lower.chars().any(|c| c.is_ascii_digit())
-        {
-            // A specific-looking identifier that matched nothing by name: the
-            // remaining hits are partial-token noise.
+        } else if !request.query.trim().contains(char::is_whitespace) {
+            // A single identifier that matched nothing by name: whatever is left
+            // matched a stemmed fragment of it, which is not what was asked for.
+            // Multi-word queries are conceptual and keep their partial matches.
             matches.clear();
         }
     }
@@ -279,9 +278,20 @@ pub async fn handle_inspect_item_structured(
                 continue;
             }
 
+            // A single-element id path means the item was indexed directly rather
+            // than reached through modules, so there are no route segments to show.
+            // The crate's path table knows where it is defined.
+            let path = if search_result.item.item_path.len() > 1 {
+                path_segments.join("::")
+            } else {
+                item_ref
+                    .path_string()
+                    .unwrap_or_else(|| path_segments.join("::"))
+            };
+
             let result = DetailedSearchResult {
                 name: item_ref.name().unwrap_or("<unnamed>").to_string(),
-                path: path_segments.join("::"),
+                path,
                 kind: item_kind_str(item_ref.inner()).to_string(),
                 crate_name: Some(crate_name.clone()),
                 docs: item_ref.comment().map(std::string::ToString::to_string),
@@ -626,6 +636,7 @@ async fn stdlib_inspect_structured(
         let mut suggestions = Vec::new();
         query_ctx
             .resolve_path(&full_path, &mut suggestions)
+            .or_else(|| query_ctx.resolve_definition_path(&full_path, request.kind))
             .map(|item_ref| {
                 if let Some(kind_filter) = request.kind
                     && !matches_kind(item_ref.inner(), kind_filter)

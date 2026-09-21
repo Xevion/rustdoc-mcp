@@ -116,7 +116,7 @@ pub(crate) const fn item_kind_str(inner: &ItemEnum) -> &'static str {
 
 pub struct CrateIndex {
     crate_data: Crate,
-    _external_crates: HashMap<u32, String>,
+    external_crates: HashMap<u32, String>,
     /// Digest of the JSON this was parsed from, so a cached parse can be checked
     /// against a file that may since have been regenerated. Zero when built in memory.
     source_digest: u64,
@@ -143,7 +143,7 @@ impl CrateIndex {
 
         Ok(Self {
             crate_data,
-            _external_crates: external_crates,
+            external_crates,
             source_digest: xxhash_rust::xxh3::xxh3_64(content.as_bytes()),
         })
     }
@@ -164,7 +164,7 @@ impl CrateIndex {
     pub(crate) fn from_crate(crate_data: Crate) -> Self {
         Self {
             crate_data,
-            _external_crates: HashMap::new(),
+            external_crates: HashMap::new(),
             source_digest: 0,
         }
     }
@@ -189,6 +189,14 @@ impl CrateIndex {
     /// Get access to the crate's paths mapping
     pub const fn paths(&self) -> &HashMap<Id, ItemSummary> {
         &self.crate_data.paths
+    }
+
+    /// Name of another crate this one references, by the id used in its path table.
+    ///
+    /// A crate's path table records foreign items under the path that defines them,
+    /// which is how a re-exported type can be traced back to the crate it came from.
+    pub fn external_crate_name(&self, crate_id: u32) -> Option<&str> {
+        self.external_crates.get(&crate_id).map(String::as_str)
     }
 
     pub fn get_item(&self, id: Id) -> Option<&Item> {
