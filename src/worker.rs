@@ -170,15 +170,31 @@ impl DocState {
     }
 
     /// Update the workspace context.
+    /// Point state at a workspace, returning whether the root actually moved.
+    ///
+    /// Compares and swaps under one lock, then clears cached docs only on a real
+    /// move. Startup auto-detection and an explicit `set_workspace` race on the
+    /// same root, and the loser must not discard docs the winner just generated.
     pub async fn set_workspace(
         &self,
         working_dir: PathBuf,
         workspace: WorkspaceContext,
         cargo_lock: Option<PathBuf>,
-    ) {
-        *self.working_directory.write().await = Some(working_dir);
+    ) -> bool {
+        let changed = {
+            let mut current = self.working_directory.write().await;
+            let changed = current.as_deref() != Some(working_dir.as_path());
+            *current = Some(working_dir);
+            changed
+        };
+
         *self.workspace.write().await = Some(workspace);
         *self.cargo_lock_path.write().await = cargo_lock;
+
+        if changed {
+            self.clear_cache().await;
+        }
+        changed
     }
 
     /// Clear cached docs (e.g., when workspace changes).
@@ -400,8 +416,6 @@ impl BackgroundWorker {
                     None
                 };
 
-                self.state.clear_cache().await;
-
                 self.state
                     .set_workspace(canonical_path.clone(), workspace_info.clone(), cargo_lock)
                     .await;
@@ -497,6 +511,56 @@ mod tests {
         check!(!state.has_workspace().await);
         check!(state.workspace().await.is_none());
         check!(state.working_directory().await.is_none());
+    }
+
+    fn workspace_at(root: &std::path::Path) -> WorkspaceContext {
+        WorkspaceContext {
+            root: root.to_path_buf(),
+            members: Vec::new(),
+            crate_info: HashMap::new(),
+            root_crate: None,
+        }
+    }
+
+    fn empty_index() -> Arc<CrateIndex> {
+        Arc::new(CrateIndex::from_crate(rustdoc_types::Crate {
+            root: rustdoc_types::Id(0),
+            crate_version: None,
+            includes_private: false,
+            index: HashMap::new(),
+            paths: HashMap::new(),
+            external_crates: HashMap::new(),
+            target: rustdoc_types::Target {
+                triple: "x86_64-unknown-linux-gnu".to_string(),
+                target_features: Vec::new(),
+            },
+            format_version: rustdoc_types::FORMAT_VERSION,
+        }))
+    }
+
+    /// Startup auto-detection and an explicit set_workspace race on the same root.
+    /// Re-pointing state at the root it already holds must not discard generated docs.
+    #[tokio::test]
+    async fn resetting_the_same_workspace_keeps_cached_docs() {
+        let state = DocState::new(None);
+        let root = std::path::PathBuf::from("/tmp/rustdoc-mcp-demo-workspace");
+
+        check!(
+            state
+                .set_workspace(root.clone(), workspace_at(&root), None)
+                .await
+        );
+
+        state
+            .put_cached(CrateName::new_unchecked("demo"), empty_index())
+            .await;
+
+        check!(
+            !state
+                .set_workspace(root.clone(), workspace_at(&root), None)
+                .await
+        );
+        check!(state.is_cached("demo").await);
     }
 
     #[tokio::test]

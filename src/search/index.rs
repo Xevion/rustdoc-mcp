@@ -9,7 +9,7 @@ use crate::types::CrateName;
 use postcard::{from_io, to_io};
 use rustdoc_types::Item;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path, time::SystemTime};
+use std::{collections::HashMap, path::Path};
 
 use super::tokenize::{TermBuilder, hash_term, tokenize_and_stem};
 use rust_stemmers::{Algorithm, Stemmer};
@@ -23,10 +23,8 @@ use rust_stemmers::{Algorithm, Stemmer};
 ///
 /// # Concurrency
 ///
-/// The counters are process-global, so parallel tests will share them. Tests
-/// should always compare deltas rather than absolute values, and assert
-/// only that the expected operation occurred at least once — never that it
-/// occurred *exactly* N times.
+/// Counters are process-global, so compare deltas, not absolute values. Under
+/// nextest each test owns its process, so a delta may be asserted exactly.
 pub mod metrics {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -53,6 +51,37 @@ pub mod metrics {
 
 /// Term hash for fast lookup
 type TermHash = u64;
+
+/// Magic bytes identifying a rustdoc-mcp search index cache file.
+const INDEX_MAGIC: [u8; 4] = *b"RDMI";
+
+/// Bump whenever [`InvertedIndex`] or the tokenizer behind its term hashes changes.
+///
+/// postcard is not self-describing, so an older cache decodes without error into an
+/// index whose hashes match nothing, and every query silently misses.
+const INDEX_SCHEMA_VERSION: u32 = 1;
+
+/// Magic, schema version, rustdoc JSON format, and the source digest.
+const INDEX_HEADER_LEN: usize = 20;
+
+fn index_header(source_digest: u64) -> [u8; INDEX_HEADER_LEN] {
+    let mut header = [0u8; INDEX_HEADER_LEN];
+    header[0..4].copy_from_slice(&INDEX_MAGIC);
+    header[4..8].copy_from_slice(&INDEX_SCHEMA_VERSION.to_le_bytes());
+    header[8..12].copy_from_slice(&rustdoc_types::FORMAT_VERSION.to_le_bytes());
+    header[12..20].copy_from_slice(&source_digest.to_le_bytes());
+    header
+}
+
+/// Digest of the rustdoc JSON an index is built from, or `None` if unreadable.
+///
+/// Keyed on content, not mtime: a regenerated JSON can land just before an index
+/// built from the previous content, leaving a stale index that looks fresh.
+fn source_digest(path: &Path) -> Option<u64> {
+    std::fs::read(path)
+        .ok()
+        .map(|bytes| xxhash_rust::xxh3::xxh3_64(&bytes))
+}
 
 /// Smallest multiplier a partial multi-word match can be scaled by.
 ///
@@ -192,23 +221,15 @@ pub(crate) struct TermIndex {
 }
 
 impl TermIndex {
-    /// Prepares index data synchronously, resolving crate and building the index.
-    /// Returns data needed for async cache operations.
+    /// Loads a cached search index, building one only when the cache cannot serve it.
     ///
-    /// This is split from `load_or_build_async` to avoid holding non-Send QueryContext
-    /// references in async functions.
-    fn prepare_index<'a>(
+    /// Invalidated when the rustdoc JSON is newer than the index, or the index came
+    /// from an incompatible version. Building ahead of the cache check would cost
+    /// what the cache exists to save, so it stays in the miss branch.
+    pub(crate) fn load_or_build<'a>(
         request: &'a super::query::QueryContext,
         crate_name: &str,
-    ) -> Result<
-        (
-            CrateName,
-            std::path::PathBuf,
-            std::path::PathBuf,
-            InvertedIndex,
-        ),
-        Vec<super::query::PathSuggestion<'a>>,
-    > {
+    ) -> Result<Self, Vec<super::query::PathSuggestion<'a>>> {
         let mut suggestions = vec![];
 
         // Use QueryContext::resolve_path for crate validation
@@ -216,77 +237,39 @@ impl TermIndex {
             .resolve_path(crate_name, &mut suggestions)
             .ok_or(suggestions)?;
 
-        let crate_index = item.crate_index();
-        let crate_name = CrateName::new_unchecked(crate_index.name());
+        let crate_name = CrateName::new_unchecked(item.crate_index().name());
 
-        // Get paths for docs and index. Preloaded crates (e.g., stdlib) supply
-        // their own source and cache paths via QueryContext, so the source can
-        // live in a read-only sysroot while the cache goes to a writable dir.
+        // Preloaded crates keep source in a read-only sysroot, cache in a writable dir.
         let doc_path = request.doc_source_path(crate_name.as_str());
         let index_path = request.index_cache_path(crate_name.as_str());
 
-        // Build index synchronously
-        let start = std::time::Instant::now();
-        tracing::info!(crate_name = %crate_name, "Building search index");
-        let terms = build_index(item);
-        tracing::debug!(crate_name = %crate_name, elapsed = ?start.elapsed(), "Index build completed");
-
-        Ok((crate_name, doc_path, index_path, terms))
-    }
-
-    /// Async portion: checks cache and stores/returns the index.
-    async fn load_or_build_async(
-        crate_name: CrateName,
-        doc_path: std::path::PathBuf,
-        index_path: std::path::PathBuf,
-        prepared_terms: InvertedIndex,
-    ) -> Self {
-        // Get mtime of rustdoc JSON
-        let mtime = tokio::fs::metadata(&doc_path)
-            .await
-            .ok()
-            .and_then(|m| m.modified().ok());
-
-        // Try loading cached index
-        if let Some(terms) = Self::load(&index_path, mtime).await {
-            metrics::record_load();
-            tracing::debug!(
-                crate_name = %crate_name,
-                terms = terms.terms.len(),
-                docs = terms.ids.len(),
-                "Loaded cached search index"
-            );
-            return Self { crate_name, terms };
-        }
-
-        // Cache miss — use the freshly built index and persist it.
-        metrics::record_build();
-        Self::store(&prepared_terms, &index_path).await;
-        Self {
-            terms: prepared_terms,
-            crate_name,
-        }
-    }
-
-    /// Loads a cached search index or builds a new one if cache is stale.
-    /// Cache is invalidated when rustdoc JSON is newer than the index file.
-    ///
-    /// This is a blocking wrapper around async cache operations to avoid
-    /// Send/Sync issues with QueryContext in async functions.
-    pub(crate) fn load_or_build<'a>(
-        request: &'a super::query::QueryContext,
-        crate_name: &str,
-    ) -> Result<Self, Vec<super::query::PathSuggestion<'a>>> {
-        // Synchronous: resolve crate and build index
-        let (crate_name, doc_path, index_path, terms) = Self::prepare_index(request, crate_name)?;
-
-        // Use tokio::task::block_in_place to allow blocking within an async runtime
-        // This works whether called from sync or async context
+        // block_on permits the non-Send ItemRef this future holds.
         Ok(tokio::task::block_in_place(|| {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(Self::load_or_build_async(
-                crate_name, doc_path, index_path, terms,
-            ))
+            tokio::runtime::Handle::current().block_on(async {
+                let digest = source_digest(&doc_path);
+
+                if let Some(terms) = Self::load(&index_path, digest).await {
+                    metrics::record_load();
+                    tracing::debug!(
+                        crate_name = %crate_name,
+                        terms = terms.terms.len(),
+                        docs = terms.ids.len(),
+                        "Loaded cached search index"
+                    );
+                    return Self { crate_name, terms };
+                }
+
+                let start = std::time::Instant::now();
+                tracing::info!(crate_name = %crate_name, "Building search index");
+                metrics::record_build();
+                let terms = build_index(item);
+                tracing::debug!(crate_name = %crate_name, elapsed = ?start.elapsed(), "Index build completed");
+
+                if let Some(digest) = digest {
+                    Self::store(&terms, &index_path, digest).await;
+                }
+                Self { crate_name, terms }
+            })
         }))
     }
 
@@ -305,38 +288,45 @@ impl TermIndex {
             .collect()
     }
 
-    /// Load a cached index from disk.
-    async fn load(path: &Path, mtime: Option<SystemTime>) -> Option<InvertedIndex> {
-        let file = tokio::fs::File::open(path).await.ok()?;
-        let index_mtime = file.metadata().await.ok()?.modified().ok()?;
+    /// Load a cached index, if it was built from this exact source content.
+    async fn load(path: &Path, expected_digest: Option<u64>) -> Option<InvertedIndex> {
+        let expected = index_header(expected_digest?);
+        let owned = path.to_path_buf();
 
-        let mtime = mtime?;
-        // Check if index is NEWER than source docs
-        if index_mtime.duration_since(mtime).is_ok() {
-            let path = path.to_path_buf();
-            // Deserialize in spawn_blocking since it's CPU intensive
-            tokio::task::spawn_blocking(move || {
-                let mut file = std::fs::File::open(&path).ok()?;
-                let mut buf = [0u8; 8192];
-                if let Ok((terms, _)) = from_io((&mut file, &mut buf)) {
-                    tracing::debug!(path = %path.display(), "Using cached index (newer than source)");
-                    return Some(terms);
-                }
-                tracing::warn!(path = %path.display(), "Failed to deserialize cached index");
-                None
-            })
-            .await
-            .ok()?
-        } else {
-            // Delete stale index
-            tracing::info!(path = %path.display(), "Cache stale or invalid, will rebuild index");
-            let _ = tokio::fs::remove_file(path).await;
+        // Deserialize in spawn_blocking since it's CPU intensive
+        let loaded = tokio::task::spawn_blocking(move || {
+            let mut file = std::fs::File::open(&owned).ok()?;
+
+            let mut header = [0u8; INDEX_HEADER_LEN];
+            if std::io::Read::read_exact(&mut file, &mut header).is_err() || header != expected {
+                tracing::info!(
+                    path = %owned.display(),
+                    "Cached index does not match its source, discarding"
+                );
+                return None;
+            }
+
+            let mut buf = [0u8; 8192];
+            if let Ok((terms, _)) = from_io((&mut file, &mut buf)) {
+                tracing::debug!(path = %owned.display(), "Using cached index");
+                return Some(terms);
+            }
+            tracing::warn!(path = %owned.display(), "Failed to deserialize cached index");
             None
+        })
+        .await
+        .ok()
+        .flatten();
+
+        // Left in place a rejected index is re-read on every query.
+        if loaded.is_none() {
+            let _ = tokio::fs::remove_file(path).await;
         }
+        loaded
     }
 
-    /// Store an index to disk.
-    async fn store(terms: &InvertedIndex, path: &Path) {
+    /// Store an index to disk, stamped with the digest it was built from.
+    async fn store(terms: &InvertedIndex, path: &Path, source_digest: u64) {
         let path = path.to_path_buf();
         let terms = terms.clone();
 
@@ -362,8 +352,12 @@ impl TermIndex {
                 .open(&path)
             {
                 Ok(mut file) => {
-                    if let Err(e) = to_io(&terms, &mut file) {
-                        tracing::warn!(path = %path.display(), error = ?e, "Failed to write search index");
+                    let written = std::io::Write::write_all(&mut file, &index_header(source_digest))
+                        .map_err(|e| e.to_string())
+                        .and_then(|()| to_io(&terms, &mut file).map(|_| ()).map_err(|e| e.to_string()));
+
+                    if let Err(e) = written {
+                        tracing::warn!(path = %path.display(), error = %e, "Failed to write search index");
                         let _ = std::fs::remove_file(&path);
                     } else {
                         tracing::debug!(path = %path.display(), "Cached search index");
@@ -513,5 +507,68 @@ mod tests {
             "Full match should rank above partial match, but top result was doc {:?}",
             results[0].0
         );
+    }
+
+    /// A headerless index decodes cleanly but matches nothing, so it must be rejected.
+    #[tokio::test]
+    async fn legacy_cache_without_version_header_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let source = dir.path().join("demo.json");
+        std::fs::write(&source, b"{}").expect("write source");
+
+        // What an older binary left behind: bare postcard, no header.
+        let index_path = dir.path().join("demo.index");
+        let legacy = make_index(vec![("alpha", 0, 1.0)], 1);
+        let mut file = std::fs::File::create(&index_path).expect("create index");
+        to_io(&legacy, &mut file).expect("write legacy index");
+        drop(file);
+
+        let loaded = TermIndex::load(&index_path, source_digest(&source)).await;
+
+        check!(loaded.is_none());
+        check!(!index_path.exists());
+    }
+
+    /// A regenerated JSON can land just before an index built from the previous
+    /// content, leaving the stale index newer than its source. mtime cannot catch
+    /// that; the digest of what the index was built from can.
+    #[tokio::test]
+    async fn cache_built_from_different_source_content_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("demo.json");
+        let index_path = dir.path().join("demo.index");
+
+        let built_from = xxhash_rust::xxh3::xxh3_64(b"{\"old\":true}");
+
+        // Source is regenerated first, so the index that follows is the newer file.
+        std::fs::write(&source, b"{\"new\":true}").expect("write source");
+        let stale = make_index(vec![("alpha", 0, 1.0)], 1);
+        TermIndex::store(&stale, &index_path, built_from).await;
+
+        let loaded = TermIndex::load(&index_path, source_digest(&source)).await;
+
+        check!(loaded.is_none());
+        check!(!index_path.exists());
+    }
+
+    /// The header must not break the case it guards: this build reads its own index.
+    #[tokio::test]
+    async fn cache_written_by_current_version_round_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let source = dir.path().join("demo.json");
+        std::fs::write(&source, b"{}").expect("write source");
+        let digest = source_digest(&source);
+
+        let index_path = dir.path().join("demo.index");
+        let original = make_index(vec![("alpha", 0, 1.0)], 1);
+        TermIndex::store(&original, &index_path, digest.expect("digest")).await;
+
+        let loaded = TermIndex::load(&index_path, digest).await;
+
+        let loaded = loaded.expect("index should round-trip");
+        check!(loaded.search(&stem("alpha"), 5).len() == 1);
+        check!(index_path.exists());
     }
 }

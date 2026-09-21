@@ -69,7 +69,7 @@ struct ImplIterator<'a> {
 
 impl<'a> ImplIterator<'a> {
     fn new(item: ItemRef<'a, Item>, kind: ImplKind) -> Self {
-        let item_iter = item.crate_index().index.values();
+        let item_iter = item.crate_index().items().values();
         Self {
             item,
             item_iter,

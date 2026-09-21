@@ -377,7 +377,7 @@ async fn render_detail_mode(
 fn count_items_by_kind(crate_index: &crate::search::CrateIndex) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
 
-    for item in crate_index.index.values() {
+    for item in crate_index.items().values() {
         let kind = match &item.inner {
             ItemEnum::Module(_) => "Modules",
             ItemEnum::Struct(_) => "Structs",

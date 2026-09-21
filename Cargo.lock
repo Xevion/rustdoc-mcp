@@ -884,7 +884,6 @@ dependencies = [
  "ahash",
  "anyhow",
  "assert2",
- "bumpalo",
  "cargo_metadata",
  "dirs",
  "futures",

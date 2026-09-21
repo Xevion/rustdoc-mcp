@@ -6,16 +6,13 @@ use crate::item::ItemRef;
 use crate::search::rustdoc::CrateIndex;
 use crate::types::CrateName;
 use crate::workspace::WorkspaceContext;
-use bumpalo::Bump;
 use rapidfuzz::distance::jaro_winkler;
 use rustdoc_types::{Id, Item, ItemEnum};
 use std::{
     cell::RefCell,
     collections::HashMap,
     fmt::{self, Debug, Formatter},
-    marker::PhantomData,
     path::{Path, PathBuf},
-    ptr::NonNull,
     sync::Arc,
 };
 
@@ -120,51 +117,19 @@ pub(crate) fn resolve_crate_from_path(
     }
 }
 
-/// A Send-safe wrapper around a raw pointer to bump-allocated data.
-///
-/// SAFETY INVARIANT: The pointer must remain valid for the lifetime of the QueryContext.
-/// We enforce this by:
-/// 1. Only creating ArenaPtr from arena allocations within QueryContext
-/// 2. Never exposing ArenaPtr outside QueryContext's lifetime
-/// 3. QueryContext is not Clone, preventing arena from being freed while refs exist
-struct ArenaPtr<T> {
-    ptr: NonNull<T>,
-    // Ensure we're not Send/Sync unless T is
-    _marker: PhantomData<*const T>,
-}
-
-// SAFETY: ArenaPtr can be Send because:
-// 1. The arena allocation lives as long as QueryContext
-// 2. QueryContext is not Clone - when it drops, all ArenaPtr become invalid
-// 3. We only dereference through &QueryContext methods, ensuring lifetime bounds
-unsafe impl<T> Send for ArenaPtr<T> where T: Send {}
-
-impl<T> ArenaPtr<T> {
-    /// Create a new ArenaPtr from a reference.
-    /// SAFETY: The reference must remain valid for the lifetime of the containing QueryContext.
-    fn new(reference: &T) -> Self {
-        Self {
-            ptr: NonNull::from(reference),
-            _marker: PhantomData,
-        }
-    }
-
-    /// Dereference the pointer with proper lifetime bounds.
-    /// SAFETY: Caller must ensure the reference doesn't outlive the arena allocation.
-    const unsafe fn as_ref<'a>(&self) -> &'a T {
-        // SAFETY: Upheld by caller - reference is valid for QueryContext lifetime
-        unsafe { self.ptr.as_ref() }
-    }
-}
-
 /// Represents a single query context with its own cache and state.
 /// Automatically cleans up when dropped.
 pub struct QueryContext {
     workspace: Arc<WorkspaceContext>,
-    /// Bump allocator for request-scoped memory management
-    arena: Bump,
-    /// Per-query cache of loaded documentation indices
-    doc_cache: RefCell<HashMap<CrateName, ArenaPtr<CrateIndex>>>,
+    /// Per-query cache of loaded documentation indices.
+    ///
+    /// `Arc`, not an arena: arena allocation never runs `CrateIndex`'s destructor, so
+    /// every parsed crate would leak. It also keeps addresses stable across rehashes.
+    ///
+    /// # Invariant
+    ///
+    /// Entries are only inserted, never removed; a borrow of one would dangle.
+    doc_cache: RefCell<HashMap<CrateName, Arc<CrateIndex>>>,
     /// Negative cache: crate names for which doc generation already failed this session.
     /// Prevents retrying expensive cargo rustdoc invocations for the same crate.
     failed_crates: RefCell<std::collections::HashSet<String>>,
@@ -221,7 +186,6 @@ impl QueryContext {
         );
         Self {
             workspace,
-            arena: Bump::new(),
             doc_cache: RefCell::new(HashMap::new()),
             failed_crates: RefCell::new(std::collections::HashSet::new()),
             preloaded,
@@ -278,10 +242,10 @@ impl QueryContext {
         }
 
         // Check cache first and return reference with proper lifetime
-        if let Some(cached_ptr) = self.doc_cache.borrow().get(crate_name) {
-            // SAFETY: The ArenaPtr is valid for the lifetime of self (arena allocation).
-            // We control all access through &self methods, ensuring the reference cannot outlive QueryContext.
-            return Ok(unsafe { cached_ptr.as_ref() });
+        if let Some(cached) = self.doc_cache.borrow().get(crate_name) {
+            let ptr: *const CrateIndex = Arc::as_ptr(cached);
+            // SAFETY: doc_cache owns this Arc and never drops it, so it outlives self.
+            return Ok(unsafe { &*ptr });
         }
 
         // Note: stdlib handlers construct a sentinel workspace root at "/".
@@ -362,14 +326,15 @@ impl QueryContext {
         Ok(self.cache_crate_index(crate_name, crate_index))
     }
 
-    /// Allocate a CrateIndex in the arena and cache it for future lookups.
+    /// Cache a `CrateIndex` for the rest of this context's lifetime.
     fn cache_crate_index(&self, crate_name: &str, crate_index: CrateIndex) -> &CrateIndex {
-        let allocated: &CrateIndex = self.arena.alloc(crate_index);
-        let arena_ptr = ArenaPtr::new(allocated);
+        let cached = Arc::new(crate_index);
+        let ptr: *const CrateIndex = Arc::as_ptr(&cached);
         self.doc_cache
             .borrow_mut()
-            .insert(CrateName::new_unchecked(crate_name), arena_ptr);
-        allocated
+            .insert(CrateName::new_unchecked(crate_name), cached);
+        // SAFETY: doc_cache now owns this Arc and never drops it before self.
+        unsafe { &*ptr }
     }
 
     /// Check if we have the minimum requirements to generate documentation.
@@ -640,5 +605,53 @@ impl<'a> PathSuggestion<'a> {
     /// Get the relevance score (0.0 to 1.0, higher is better).
     pub const fn score(&self) -> f64 {
         self.score
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert2::check;
+    use rustdoc_types::{Crate, Target};
+    use std::collections::HashMap as StdHashMap;
+
+    fn empty_crate() -> Crate {
+        Crate {
+            root: Id(0),
+            crate_version: None,
+            includes_private: false,
+            index: StdHashMap::new(),
+            paths: StdHashMap::new(),
+            external_crates: StdHashMap::new(),
+            target: Target {
+                triple: "x86_64-unknown-linux-gnu".to_string(),
+                target_features: Vec::new(),
+            },
+            format_version: rustdoc_types::FORMAT_VERSION,
+        }
+    }
+
+    fn context(root: &Path) -> QueryContext {
+        QueryContext::new(Arc::new(WorkspaceContext {
+            root: root.to_path_buf(),
+            members: Vec::new(),
+            crate_info: StdHashMap::new(),
+            root_crate: None,
+        }))
+    }
+
+    /// A cached `CrateIndex` owns a parsed rustdoc JSON; outliving its context leaks it.
+    #[test]
+    fn dropping_query_context_releases_cached_crate_indices() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let weak = {
+            let ctx = context(dir.path());
+            ctx.cache_crate_index("demo", CrateIndex::from_crate(empty_crate()));
+            let cache = ctx.doc_cache.borrow();
+            Arc::downgrade(cache.get("demo").expect("just cached"))
+        };
+
+        check!(weak.upgrade().is_none());
     }
 }

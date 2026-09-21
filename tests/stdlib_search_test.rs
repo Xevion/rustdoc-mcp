@@ -225,10 +225,17 @@ async fn warm_cache_writes_to_isolated_dir() {
         .expect("warm search failed");
     check!(matches!(warm, StructuredSearchResult::Hits { .. }));
 
-    let (_builds_after_warm, loads_after_warm) = index_metrics::snapshot();
+    let (builds_after_warm, loads_after_warm) = index_metrics::snapshot();
     check!(
         loads_after_warm - loads_after_cold >= 1,
         "warm call should have loaded the index from disk at least once \
          (loads went from {loads_after_cold} to {loads_after_warm})"
+    );
+
+    // A cache hit only saves anything if the index is not built anyway.
+    check!(
+        builds_after_warm == builds_after_cold,
+        "warm call rebuilt the index despite loading it from cache \
+         (builds went from {builds_after_cold} to {builds_after_warm})"
     );
 }

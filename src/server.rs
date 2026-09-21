@@ -66,7 +66,7 @@ impl ItemServer {
         let old_workspace = self.state.working_directory().await;
 
         // Execute the logic, passing current workspace for change detection
-        let (canonical_path, workspace_info, changed) =
+        let (canonical_path, workspace_info, _) =
             handle_set_workspace(path, old_workspace.as_deref())
                 .await
                 .map_err(|e| e.user_message())?;
@@ -79,13 +79,10 @@ impl ItemServer {
             None
         };
 
-        // Clear cache when workspace changes
-        if changed {
-            tracing::info!("Workspace changed, clearing documentation cache");
-            self.state.clear_cache().await;
-        }
-
-        self.state
+        // set_workspace decides this under its own lock, so a racing auto-detection
+        // of the same root cannot clear docs between the check and the swap.
+        let changed = self
+            .state
             .set_workspace(canonical_path.clone(), workspace_info.clone(), cargo_lock)
             .await;
 

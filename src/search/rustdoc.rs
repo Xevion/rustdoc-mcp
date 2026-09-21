@@ -116,7 +116,6 @@ pub(crate) const fn item_kind_str(inner: &ItemEnum) -> &'static str {
 
 pub struct CrateIndex {
     crate_data: Crate,
-    pub index: HashMap<Id, Item>,
     _external_crates: HashMap<u32, String>,
 }
 
@@ -132,8 +131,6 @@ impl CrateIndex {
         let crate_data: Crate =
             serde_json::from_str(&content).context("Failed to parse rustdoc JSON")?;
 
-        let index = crate_data.index.clone();
-
         let external_crates = crate_data
             .external_crates
             .iter()
@@ -142,19 +139,21 @@ impl CrateIndex {
 
         Ok(Self {
             crate_data,
-            index,
             _external_crates: external_crates,
         })
+    }
+
+    /// All items in the crate, keyed by id.
+    pub const fn items(&self) -> &HashMap<Id, Item> {
+        &self.crate_data.index
     }
 
     /// Build an index directly from an in-memory crate, for tests that need a formatter
     /// without a rustdoc JSON file on disk.
     #[cfg(test)]
     pub(crate) fn from_crate(crate_data: Crate) -> Self {
-        let index = crate_data.index.clone();
         Self {
             crate_data,
-            index,
             _external_crates: HashMap::new(),
         }
     }
@@ -182,11 +181,11 @@ impl CrateIndex {
     }
 
     pub fn get_item(&self, id: Id) -> Option<&Item> {
-        self.index.get(&id)
+        self.items().get(&id)
     }
 
     pub fn root_module(&self) -> Option<&Item> {
-        self.index.get(&self.crate_data.root)
+        self.items().get(&self.crate_data.root)
     }
 
     /// Get the root item ID
@@ -218,7 +217,7 @@ impl CrateIndex {
     }
 
     pub fn find_by_kind(&self, kind: ItemKind) -> Vec<&Item> {
-        self.index
+        self.items()
             .values()
             .filter(|item| matches_kind(&item.inner, kind))
             .collect()
@@ -248,7 +247,7 @@ impl CrateIndex {
     /// Returns all impl blocks for the given type ID.
     pub fn get_impls(&self, type_id: Id) -> Vec<&Item> {
         use rustdoc_types::Type;
-        self.index
+        self.items()
             .values()
             .filter(|item| {
                 if let ItemEnum::Impl(impl_item) = &item.inner {
@@ -268,7 +267,7 @@ impl CrateIndex {
         use rustdoc_types::Type;
         let mut impls = Vec::new();
 
-        for item in self.index.values() {
+        for item in self.items().values() {
             if let ItemEnum::Impl(impl_item) = &item.inner {
                 let for_type_matches = match &impl_item.for_ {
                     Type::ResolvedPath(path) => self
@@ -303,7 +302,7 @@ impl CrateIndex {
 
     pub fn public_functions(&self) -> Vec<&Item> {
         let mut items: Vec<_> = self
-            .index
+            .items()
             .values()
             .filter(|item| {
                 matches!(item.inner, ItemEnum::Function(_))
@@ -316,7 +315,7 @@ impl CrateIndex {
 
     pub fn public_types(&self) -> Vec<&Item> {
         let mut items: Vec<_> = self
-            .index
+            .items()
             .values()
             .filter(|item| {
                 matches!(
@@ -331,7 +330,7 @@ impl CrateIndex {
 
     pub fn public_traits(&self) -> Vec<&Item> {
         let mut items: Vec<_> = self
-            .index
+            .items()
             .values()
             .filter(|item| {
                 matches!(item.inner, ItemEnum::Trait(_))
