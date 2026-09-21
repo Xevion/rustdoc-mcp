@@ -7,6 +7,7 @@
 pub(crate) mod index;
 pub(crate) mod query;
 pub(crate) mod rustdoc;
+pub(crate) mod scan;
 pub(crate) mod scoring;
 pub(crate) mod tokenize;
 

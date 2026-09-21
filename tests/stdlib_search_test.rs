@@ -307,18 +307,55 @@ async fn stdlib_path_queries_resolve(#[case] query: &str) {
     check!(result.is_ok(), "'{query}' failed to resolve: {result:?}");
 }
 
-/// Types `std` re-exports from `alloc` are still not findable by name in `std`.
+/// Types `std` re-exports from `core` are still not findable by name in `std`.
 ///
-/// `std`'s rustdoc JSON contains no entry for them at all: its `collections` module
-/// lists child ids that are absent from its own item map, and only its path table
-/// records them, tagged with the crate that defines them. A path query resolves
-/// through that table, but a name search has nothing in the index to match.
+/// Resolving one means parsing core's rustdoc JSON, tens of megabytes, to render a
+/// single hit among many, so a re-export whose crate is not already in memory is
+/// dropped. Describing the target from the path table alone would close this.
+#[rstest]
+#[case("std", "Option")]
+#[ignore = "resolving a core re-export would parse core to render one hit"]
+#[tokio::test(flavor = "multi_thread")]
+async fn stdlib_search_finds_core_reexport(#[case] crate_name: &str, #[case] query: &str) {
+    let Some((state, _cache)) = isolated_stdlib_state() else {
+        return;
+    };
+
+    let result = handle_search_structured(
+        &state,
+        SearchRequest {
+            query: query.to_string(),
+            crate_name: crate_name.to_string(),
+            limit: 10,
+        },
+    )
+    .await
+    .expect("stdlib search should succeed");
+
+    let StructuredSearchResult::Hits { hits, .. } = result else {
+        panic!("expected hits for '{query}' in {crate_name}");
+    };
+
+    check!(
+        hits.iter().any(|hit| hit.full_path.ends_with(query)),
+        "'{query}' not among {:?}",
+        hits.iter().map(|h| &h.full_path).collect::<Vec<_>>()
+    );
+}
+
+/// Types `std` re-exports from `alloc` are findable by name in `std`.
 ///
-/// Ignored rather than deleted so the gap stays stated.
+/// The re-export site is an unnamed item in std's own map that carries the name in
+/// its `use` payload, so the index holds it. Rendering it has to leave std's JSON
+/// for the crate that defines the target, which only std's path table records.
 #[rstest]
 #[case("std", "BTreeMap")]
 #[case("std", "Vec")]
-#[ignore = "std re-exports from alloc are absent from std's item map"]
+#[case("std", "String")]
+#[case("std", "BTreeSet")]
+#[case("std", "VecDeque")]
+#[case("std", "BinaryHeap")]
+#[case("std", "LinkedList")]
 #[tokio::test(flavor = "multi_thread")]
 async fn stdlib_search_finds_reexported_type(#[case] crate_name: &str, #[case] query: &str) {
     let Some((state, _cache)) = isolated_stdlib_state() else {

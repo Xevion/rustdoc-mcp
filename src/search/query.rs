@@ -513,6 +513,23 @@ impl QueryContext {
         self.resolve_definition_path_inner(path, kind, true)
     }
 
+    /// Whether a crate's documentation is already parsed and in memory.
+    fn is_resident(&self, crate_name: &str) -> bool {
+        self.preloaded.contains_key(crate_name) || self.doc_cache.borrow().contains_key(crate_name)
+    }
+
+    /// Resolves a definition path, but only when its crate is already parsed.
+    ///
+    /// Rendering one hit must never pull a crate's JSON into memory: core alone is
+    /// tens of megabytes, and a search fans out over many unrelated re-exports.
+    fn resolve_resident_definition<'a>(&'a self, path: &str) -> Option<ItemRef<'a, Item>> {
+        let crate_name = path.split("::").next()?;
+        if !self.is_resident(crate_name) {
+            return None;
+        }
+        self.resolve_definition_path(path, None)
+    }
+
     fn resolve_definition_path_inner<'a>(
         &'a self,
         path: &str,
@@ -741,8 +758,13 @@ impl QueryContext {
                     // A re-export can name a target in another crate, whose own
                     // module chain may be non-public there. std pulling Vec and
                     // BTreeMap out of alloc is the common case.
+                    let defining = foreign_definition_path(item.crate_index(), target_id);
                     item = item
                         .get(target_id)
+                        .or_else(|| {
+                            let path = defining.as_deref()?;
+                            self.resolve_resident_definition(path)
+                        })
                         .or_else(|| self.resolve_path(&use_item.source, &mut vec![]))
                         .or_else(|| self.resolve_definition_path(&use_item.source, None))?;
                 }
@@ -767,6 +789,25 @@ impl Drop for QueryContext {
             self.doc_cache.borrow().len()
         );
     }
+}
+
+/// Where a re-export's target is defined, when another crate's JSON defines it.
+///
+/// The target id is only meaningful as a key into the importing crate's own path
+/// table, so the string the `use` carries is never consulted: it spells the defining
+/// crate under whatever name the importing crate binds it to, which may load nothing.
+fn foreign_definition_path(crate_index: &CrateIndex, id: Id) -> Option<String> {
+    let summary = crate_index.paths().get(&id)?;
+    if summary.crate_id == 0 || summary.path.is_empty() {
+        return None;
+    }
+    let defining = crate_index.external_crate_name(summary.crate_id)?;
+    Some(
+        std::iter::once(defining)
+            .chain(summary.path[1..].iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join("::"),
+    )
 }
 
 /// Whether every segment of `needle` appears in `haystack`, in order.
