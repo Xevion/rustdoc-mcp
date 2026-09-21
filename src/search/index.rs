@@ -73,7 +73,7 @@ const INDEX_MAGIC: [u8; 4] = *b"RDMI";
 ///
 /// postcard is not self-describing, so an older cache decodes without error into an
 /// index whose hashes match nothing, and every query silently misses.
-const INDEX_SCHEMA_VERSION: u32 = 1;
+const INDEX_SCHEMA_VERSION: u32 = 2;
 
 /// Magic, schema version, rustdoc JSON format, and the source digest.
 const INDEX_HEADER_LEN: usize = 20;
@@ -290,11 +290,12 @@ impl TermIndex {
                 let start = std::time::Instant::now();
                 tracing::info!(crate_name = %crate_name, "Building search index");
                 metrics::record_build();
-                let terms = build_index(item);
+                let (terms, built_from) = build_index(item);
                 tracing::debug!(crate_name = %crate_name, elapsed = ?start.elapsed(), "Index build completed");
 
-                if let Some(digest) = digest {
-                    Self::store(&terms, &index_path, digest).await;
+                // Zero means the crate was built in memory and has no source to key on.
+                if built_from != 0 {
+                    Self::store(&terms, &index_path, built_from).await;
                 }
 
                 let terms = Arc::new(terms);
@@ -412,11 +413,16 @@ impl TermIndex {
     }
 }
 
-/// Builds an inverted index from a crate's documentation tree.
-fn build_index(root_item: ItemRef<'_, Item>) -> InvertedIndex {
+/// Builds an inverted index, paired with the digest of the content it came from.
+///
+/// The two are returned together so the digest can never be taken from a second,
+/// later read of the source file: the worker regenerates rustdoc JSON in the
+/// background, and an index stamped with the newer digest validates forever.
+fn build_index(root_item: ItemRef<'_, Item>) -> (InvertedIndex, u64) {
+    let built_from = root_item.crate_index().source_digest();
     let mut builder = TermBuilder::default();
     builder.recurse(root_item, &[], false);
-    builder.finalize()
+    (builder.finalize(), built_from)
 }
 
 #[cfg(test)]

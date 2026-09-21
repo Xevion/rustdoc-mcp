@@ -136,11 +136,6 @@ pub struct QueryContext {
     /// Without it each request re-parses every crate's rustdoc JSON into its own
     /// map, duplicating what the worker already did.
     shared: Option<Arc<crate::worker::DocState>>,
-    /// Source digests already computed during this request.
-    ///
-    /// Validating the shared caches means hashing each crate's JSON, and several
-    /// lookups ask for the same crate. Files are not expected to change mid-request.
-    digests: RefCell<HashMap<CrateName, Option<u64>>>,
     /// Negative cache: crate names for which doc generation already failed this session.
     /// Prevents retrying expensive cargo rustdoc invocations for the same crate.
     failed_crates: RefCell<std::collections::HashSet<String>>,
@@ -201,7 +196,6 @@ impl QueryContext {
             failed_crates: RefCell::new(std::collections::HashSet::new()),
             preloaded,
             shared: None,
-            digests: RefCell::new(HashMap::new()),
         }
     }
 
@@ -216,7 +210,6 @@ impl QueryContext {
             failed_crates: RefCell::new(std::collections::HashSet::new()),
             preloaded: HashMap::new(),
             shared: Some(shared),
-            digests: RefCell::new(HashMap::new()),
         }
     }
 
@@ -249,17 +242,13 @@ impl QueryContext {
         self.shared.as_ref()
     }
 
-    /// Digest of a crate's rustdoc JSON, computed at most once per request.
+    /// Digest of a crate's rustdoc JSON, read fresh at each call.
+    ///
+    /// Deliberately not memoized: the worker can regenerate a crate's JSON while a
+    /// request is in flight, and a digest captured beforehand would validate the
+    /// index built from the superseded content.
     pub(crate) fn source_digest_of(&self, crate_name: &str) -> Option<u64> {
-        if let Some(cached) = self.digests.borrow().get(crate_name) {
-            return *cached;
-        }
-
-        let digest = source_digest(&self.doc_source_path(crate_name));
-        self.digests
-            .borrow_mut()
-            .insert(CrateName::new_unchecked(crate_name), digest);
-        digest
+        source_digest(&self.doc_source_path(crate_name))
     }
 
     /// Returns true if documentation generation for this crate failed earlier in this

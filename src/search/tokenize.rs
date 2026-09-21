@@ -6,13 +6,10 @@
 #![allow(clippy::cast_precision_loss)]
 
 use crate::item::ItemRef;
-use ahash::{AHashMap, AHasher};
+use ahash::AHashMap;
 use rust_stemmers::{Algorithm, Stemmer};
 use rustdoc_types::{Item, ItemEnum};
-use std::{
-    collections::HashMap,
-    hash::{Hash, Hasher},
-};
+use std::collections::HashMap;
 
 use super::index::InvertedIndex;
 
@@ -371,9 +368,7 @@ pub(crate) fn index_token(token: &str, tokens: &mut Vec<String>, stemmer: &Stemm
 
 /// Hashes a term for fast lookup (case-insensitive).
 pub(crate) fn hash_term(term: &str) -> u64 {
-    let mut hasher = AHasher::default();
-    term.to_lowercase().hash(&mut hasher);
-    hasher.finish()
+    xxhash_rust::xxh3::xxh3_64(term.to_lowercase().as_bytes())
 }
 
 #[cfg(test)]
@@ -381,6 +376,15 @@ mod tests {
     use super::*;
     use assert2::check;
     use rstest::rstest;
+
+    /// Term hashes are written into on-disk index files and compared against hashes
+    /// computed by a later process. A seeded or version-dependent hasher makes every
+    /// cached index decode cleanly and match nothing.
+    #[test]
+    fn hash_term_is_stable_across_processes() {
+        check!(hash_term("QueryContext") == 4_388_243_129_022_353_635);
+        check!(hash_term("cache") == 3_196_654_445_509_280_238);
+    }
 
     #[rstest]
     #[case("CamelCase", &["camel", "case", "camelcas"])] // Now lowercase
