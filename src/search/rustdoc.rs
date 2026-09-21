@@ -117,6 +117,9 @@ pub(crate) const fn item_kind_str(inner: &ItemEnum) -> &'static str {
 pub struct CrateIndex {
     crate_data: Crate,
     _external_crates: HashMap<u32, String>,
+    /// Digest of the JSON this was parsed from, so a cached parse can be checked
+    /// against a file that may since have been regenerated. Zero when built in memory.
+    source_digest: u64,
 }
 
 impl CrateIndex {
@@ -128,6 +131,7 @@ impl CrateIndex {
         let path = path.as_ref();
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read rustdoc JSON at {}", path.display()))?;
+        crate::search::index::metrics::record_doc_parse();
         let crate_data: Crate =
             serde_json::from_str(&content).context("Failed to parse rustdoc JSON")?;
 
@@ -140,12 +144,18 @@ impl CrateIndex {
         Ok(Self {
             crate_data,
             _external_crates: external_crates,
+            source_digest: xxhash_rust::xxh3::xxh3_64(content.as_bytes()),
         })
     }
 
     /// All items in the crate, keyed by id.
     pub const fn items(&self) -> &HashMap<Id, Item> {
         &self.crate_data.index
+    }
+
+    /// Digest of the JSON this was parsed from; zero if built in memory.
+    pub const fn source_digest(&self) -> u64 {
+        self.source_digest
     }
 
     /// Build an index directly from an in-memory crate, for tests that need a formatter
@@ -155,6 +165,7 @@ impl CrateIndex {
         Self {
             crate_data,
             _external_crates: HashMap::new(),
+            source_digest: 0,
         }
     }
 

@@ -6,7 +6,65 @@ use common::{
     isolated_workspace_with_serde, warm_cache,
 };
 use rstest::rstest;
+use rustdoc_mcp::index_metrics;
 use rustdoc_mcp::tools::search::{SearchRequest, handle_search};
+
+/// Searching needs the term index, not the parsed docs behind it. Once the index
+/// is in memory, a repeat query must not re-parse every crate's rustdoc JSON —
+/// that parse is what keeps tens of megabytes resident.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn warm_search_does_not_reparse_crate_docs(isolated_workspace: IsolatedWorkspace) {
+    let request = || SearchRequest {
+        query: "QueryContext".to_string(),
+        crate_name: "rustdoc-mcp".to_string(),
+        limit: 5,
+    };
+
+    handle_search(&isolated_workspace.state, request())
+        .await
+        .expect("first search");
+    let parses_after_first = index_metrics::doc_parses();
+
+    handle_search(&isolated_workspace.state, request())
+        .await
+        .expect("second search");
+    let parses_after_second = index_metrics::doc_parses();
+
+    check!(
+        parses_after_second == parses_after_first,
+        "warm search re-parsed rustdoc JSON \
+         (parses went from {parses_after_first} to {parses_after_second})"
+    );
+}
+
+/// A parsed index should outlive the request that built it. Re-reading every
+/// crate's index from disk on each query is what makes repeat calls slow.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_search_does_not_reload_index_from_disk(isolated_workspace: IsolatedWorkspace) {
+    let request = || SearchRequest {
+        query: "QueryContext".to_string(),
+        crate_name: "rustdoc-mcp".to_string(),
+        limit: 5,
+    };
+
+    handle_search(&isolated_workspace.state, request())
+        .await
+        .expect("first search");
+    let (_, loads_after_first) = index_metrics::snapshot();
+
+    handle_search(&isolated_workspace.state, request())
+        .await
+        .expect("second search");
+    let (_, loads_after_second) = index_metrics::snapshot();
+
+    check!(
+        loads_after_second == loads_after_first,
+        "second search re-read the index from disk \
+         (loads went from {loads_after_first} to {loads_after_second})"
+    );
+}
 
 // --- Working Search Tests ---
 // These items ARE indexed and should work.

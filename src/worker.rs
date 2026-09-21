@@ -5,6 +5,7 @@
 //! via shared futures. Supports graceful shutdown via `CancellationToken`.
 
 use crate::search::CrateIndex;
+use crate::search::index::InvertedIndex;
 use crate::stdlib::StdlibDocs;
 use crate::tools::set_workspace::handle_set_workspace;
 use crate::types::CrateName;
@@ -104,6 +105,10 @@ pub struct DocState {
     /// LRU cache of parsed crate indices
     cache: RwLock<LruCache<CrateName, Arc<CrateIndex>>>,
 
+    /// LRU cache of built search indices, paired with the source digest they
+    /// describe. Without it every query re-reads each crate's index from disk.
+    index_cache: RwLock<LruCache<CrateName, (u64, Arc<InvertedIndex>)>>,
+
     /// In-flight generation futures (can be awaited by multiple callers)
     in_flight: Mutex<HashMap<CrateName, SharedDocFuture>>,
 
@@ -136,6 +141,7 @@ impl DocState {
     pub fn new(stdlib: Option<Arc<StdlibDocs>>) -> Self {
         Self {
             cache: RwLock::new(LruCache::new(NonZeroUsize::new(LRU_CACHE_SIZE).unwrap())),
+            index_cache: RwLock::new(LruCache::new(NonZeroUsize::new(LRU_CACHE_SIZE).unwrap())),
             in_flight: Mutex::new(HashMap::new()),
             workspace: RwLock::new(None),
             working_directory: RwLock::new(None),
@@ -201,7 +207,31 @@ impl DocState {
     pub async fn clear_cache(&self) {
         tracing::debug!("Clearing documentation cache");
         self.cache.write().await.clear();
+        self.index_cache.write().await.clear();
         self.in_flight.lock().await.clear();
+    }
+
+    /// Fetch a built search index, if one is cached for this exact source content.
+    pub(crate) async fn get_index(
+        &self,
+        crate_name: &CrateName,
+        digest: u64,
+    ) -> Option<Arc<InvertedIndex>> {
+        let (cached_digest, index) = self.index_cache.write().await.get(crate_name).cloned()?;
+        (cached_digest == digest).then_some(index)
+    }
+
+    /// Cache a built search index against the source digest it describes.
+    pub(crate) async fn put_index(
+        &self,
+        crate_name: CrateName,
+        digest: u64,
+        index: Arc<InvertedIndex>,
+    ) {
+        self.index_cache
+            .write()
+            .await
+            .put(crate_name, (digest, index));
     }
 
     /// Get docs for a crate, waiting for in-flight generation if needed.

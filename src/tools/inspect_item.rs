@@ -150,7 +150,8 @@ pub async fn handle_inspect_item_structured(
             .map(CrateName::new_unchecked),
     );
 
-    let query_ctx = QueryContext::new(Arc::new(workspace_ctx.clone()));
+    let query_ctx =
+        QueryContext::with_shared_cache(Arc::new(workspace_ctx.clone()), Arc::clone(state));
 
     let is_path_query = path.path_components.len() > 1 || request.query.contains("::");
     let specified_crate = resolve_crate_from_path(&mut path, &known_crates);

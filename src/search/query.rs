@@ -3,6 +3,7 @@
 
 use crate::error::LoadError;
 use crate::item::ItemRef;
+use crate::search::index::source_digest;
 use crate::search::rustdoc::CrateIndex;
 use crate::types::CrateName;
 use crate::workspace::WorkspaceContext;
@@ -130,6 +131,16 @@ pub struct QueryContext {
     ///
     /// Entries are only inserted, never removed; a borrow of one would dangle.
     doc_cache: RefCell<HashMap<CrateName, Arc<CrateIndex>>>,
+    /// Process-wide parsed-crate cache, shared with the background worker.
+    ///
+    /// Without it each request re-parses every crate's rustdoc JSON into its own
+    /// map, duplicating what the worker already did.
+    shared: Option<Arc<crate::worker::DocState>>,
+    /// Source digests already computed during this request.
+    ///
+    /// Validating the shared caches means hashing each crate's JSON, and several
+    /// lookups ask for the same crate. Files are not expected to change mid-request.
+    digests: RefCell<HashMap<CrateName, Option<u64>>>,
     /// Negative cache: crate names for which doc generation already failed this session.
     /// Prevents retrying expensive cargo rustdoc invocations for the same crate.
     failed_crates: RefCell<std::collections::HashSet<String>>,
@@ -189,6 +200,23 @@ impl QueryContext {
             doc_cache: RefCell::new(HashMap::new()),
             failed_crates: RefCell::new(std::collections::HashSet::new()),
             preloaded,
+            shared: None,
+            digests: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Create a context that reuses parsed crates from the shared cache.
+    pub fn with_shared_cache(
+        workspace: Arc<WorkspaceContext>,
+        shared: Arc<crate::worker::DocState>,
+    ) -> Self {
+        Self {
+            workspace,
+            doc_cache: RefCell::new(HashMap::new()),
+            failed_crates: RefCell::new(std::collections::HashSet::new()),
+            preloaded: HashMap::new(),
+            shared: Some(shared),
+            digests: RefCell::new(HashMap::new()),
         }
     }
 
@@ -214,6 +242,24 @@ impl QueryContext {
             return pre.index_cache_path.clone();
         }
         CrateName::new_unchecked(crate_name).index_path(&self.workspace.root.join("target/doc"))
+    }
+
+    /// The process-wide cache backing this context, if it has one.
+    pub(crate) const fn shared(&self) -> Option<&Arc<crate::worker::DocState>> {
+        self.shared.as_ref()
+    }
+
+    /// Digest of a crate's rustdoc JSON, computed at most once per request.
+    pub(crate) fn source_digest_of(&self, crate_name: &str) -> Option<u64> {
+        if let Some(cached) = self.digests.borrow().get(crate_name) {
+            return *cached;
+        }
+
+        let digest = source_digest(&self.doc_source_path(crate_name));
+        self.digests
+            .borrow_mut()
+            .insert(CrateName::new_unchecked(crate_name), digest);
+        digest
     }
 
     /// Returns true if documentation generation for this crate failed earlier in this
@@ -246,6 +292,12 @@ impl QueryContext {
             let ptr: *const CrateIndex = Arc::as_ptr(cached);
             // SAFETY: doc_cache owns this Arc and never drops it, so it outlives self.
             return Ok(unsafe { &*ptr });
+        }
+
+        // Reuse the worker's parse when it has one, rather than building a second
+        // copy of the same map.
+        if let Some(index) = self.shared_lookup(crate_name) {
+            return Ok(self.cache_crate_arc(crate_name, index));
         }
 
         // Note: stdlib handlers construct a sentinel workspace root at "/".
@@ -326,9 +378,48 @@ impl QueryContext {
         Ok(self.cache_crate_index(crate_name, crate_index))
     }
 
+    /// Read a parsed crate out of the shared cache, if one matches the current source.
+    ///
+    /// An entry parsed from a JSON that has since been regenerated is stale, and
+    /// serving it would hand back documentation for code that no longer exists.
+    fn shared_lookup(&self, crate_name: &str) -> Option<Arc<CrateIndex>> {
+        let shared = self.shared.as_ref()?;
+        let cached = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(shared.get_cached(crate_name))
+        })?;
+
+        // An unreadable source cannot contradict the cache, so keep it.
+        let Some(on_disk) = self.source_digest_of(crate_name) else {
+            return Some(cached);
+        };
+
+        if cached.source_digest() == on_disk {
+            return Some(cached);
+        }
+
+        tracing::debug!(crate_name, "Shared cache entry is stale, reparsing");
+        None
+    }
+
     /// Cache a `CrateIndex` for the rest of this context's lifetime.
+    ///
+    /// Also publishes to the shared cache so the next request reuses this parse.
     fn cache_crate_index(&self, crate_name: &str, crate_index: CrateIndex) -> &CrateIndex {
         let cached = Arc::new(crate_index);
+
+        if let Some(shared) = &self.shared {
+            let key = CrateName::new_unchecked(crate_name);
+            let value = Arc::clone(&cached);
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(shared.put_cached(key, value));
+            });
+        }
+
+        self.cache_crate_arc(crate_name, cached)
+    }
+
+    /// Hold an already-parsed crate for the rest of this context's lifetime.
+    fn cache_crate_arc(&self, crate_name: &str, cached: Arc<CrateIndex>) -> &CrateIndex {
         let ptr: *const CrateIndex = Arc::as_ptr(&cached);
         self.doc_cache
             .borrow_mut()
@@ -638,6 +729,82 @@ mod tests {
             crate_info: StdHashMap::new(),
             root_crate: None,
         }))
+    }
+
+    /// The worker and the request path each used to parse the same JSON into their
+    /// own map. A context wired to the shared cache must reuse that parse: here the
+    /// crate exists only in the cache, with no JSON on disk to fall back to.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_crate_reuses_the_shared_cache_instead_of_parsing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = Arc::new(crate::worker::DocState::new(None));
+        let cached = Arc::new(CrateIndex::from_crate(empty_crate()));
+
+        state
+            .put_cached(CrateName::new_unchecked("demo"), Arc::clone(&cached))
+            .await;
+
+        let ctx = QueryContext::with_shared_cache(
+            Arc::new(WorkspaceContext {
+                root: dir.path().to_path_buf(),
+                members: Vec::new(),
+                crate_info: StdHashMap::new(),
+                root_crate: None,
+            }),
+            Arc::clone(&state),
+        );
+
+        let loaded = ctx.load_crate("demo");
+
+        check!(loaded.is_ok());
+        check!(std::ptr::eq(
+            loaded.expect("cached crate"),
+            Arc::as_ptr(&cached)
+        ));
+    }
+
+    /// The shared cache holds parses from earlier requests. If the JSON has been
+    /// regenerated since, reusing that parse serves stale documentation, so a cached
+    /// entry whose digest no longer matches the file on disk must be ignored.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shared_cache_entry_is_ignored_when_source_changed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let doc_dir = dir.path().join("target/doc");
+        std::fs::create_dir_all(&doc_dir).expect("doc dir");
+
+        // Real JSON on disk, and a cached parse that did not come from it.
+        let source = doc_dir.join("demo.json");
+        std::fs::write(
+            &source,
+            serde_json::to_string(&empty_crate()).expect("serialize"),
+        )
+        .expect("write source");
+
+        let state = Arc::new(crate::worker::DocState::new(None));
+        state
+            .put_cached(
+                CrateName::new_unchecked("demo"),
+                Arc::new(CrateIndex::from_crate(empty_crate())),
+            )
+            .await;
+
+        let ctx = QueryContext::with_shared_cache(
+            Arc::new(WorkspaceContext {
+                root: dir.path().to_path_buf(),
+                members: Vec::new(),
+                crate_info: StdHashMap::new(),
+                root_crate: None,
+            }),
+            Arc::clone(&state),
+        );
+
+        let loaded = ctx.load_crate("demo").expect("loads from disk");
+
+        check!(loaded.source_digest() == source_digest_of(&source));
+    }
+
+    fn source_digest_of(path: &Path) -> u64 {
+        xxhash_rust::xxh3::xxh3_64(&std::fs::read(path).expect("read source"))
     }
 
     /// A cached `CrateIndex` owns a parsed rustdoc JSON; outliving its context leaks it.

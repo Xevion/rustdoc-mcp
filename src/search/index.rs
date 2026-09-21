@@ -9,7 +9,7 @@ use crate::types::CrateName;
 use postcard::{from_io, to_io};
 use rustdoc_types::Item;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use super::tokenize::{TermBuilder, hash_term, tokenize_and_stem};
 use rust_stemmers::{Algorithm, Stemmer};
@@ -30,6 +30,20 @@ pub mod metrics {
 
     static INDEX_BUILDS: AtomicUsize = AtomicUsize::new(0);
     static INDEX_LOADS: AtomicUsize = AtomicUsize::new(0);
+    static DOC_PARSES: AtomicUsize = AtomicUsize::new(0);
+
+    /// Count of rustdoc JSON files parsed into a `CrateIndex`.
+    ///
+    /// Parsing is by far the most expensive thing a query can trigger, so a warm
+    /// path that still parses is a cache that is not doing its job.
+    #[must_use]
+    pub fn doc_parses() -> usize {
+        DOC_PARSES.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn record_doc_parse() {
+        DOC_PARSES.fetch_add(1, Ordering::Relaxed);
+    }
 
     /// Snapshot of `(builds, loads)` counters at a point in time.
     #[must_use]
@@ -77,7 +91,7 @@ fn index_header(source_digest: u64) -> [u8; INDEX_HEADER_LEN] {
 ///
 /// Keyed on content, not mtime: a regenerated JSON can land just before an index
 /// built from the previous content, leaving a stale index that looks fresh.
-fn source_digest(path: &Path) -> Option<u64> {
+pub(super) fn source_digest(path: &Path) -> Option<u64> {
     std::fs::read(path)
         .ok()
         .map(|bytes| xxhash_rust::xxh3::xxh3_64(&bytes))
@@ -217,7 +231,7 @@ pub(crate) struct DetailedSearchResult {
 /// A search index for a specific crate.
 pub(crate) struct TermIndex {
     crate_name: CrateName,
-    terms: InvertedIndex,
+    terms: Arc<InvertedIndex>,
 }
 
 impl TermIndex {
@@ -240,13 +254,21 @@ impl TermIndex {
         let crate_name = CrateName::new_unchecked(item.crate_index().name());
 
         // Preloaded crates keep source in a read-only sysroot, cache in a writable dir.
-        let doc_path = request.doc_source_path(crate_name.as_str());
         let index_path = request.index_cache_path(crate_name.as_str());
 
         // block_on permits the non-Send ItemRef this future holds.
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                let digest = source_digest(&doc_path);
+                let digest = request.source_digest_of(crate_name.as_str());
+                let shared = request.shared();
+
+                // In memory from an earlier request: no disk read, no rebuild.
+                if let Some(shared) = shared
+                    && let Some(digest) = digest
+                    && let Some(terms) = shared.get_index(&crate_name, digest).await
+                {
+                    return Self { crate_name, terms };
+                }
 
                 if let Some(terms) = Self::load(&index_path, digest).await {
                     metrics::record_load();
@@ -256,6 +278,12 @@ impl TermIndex {
                         docs = terms.ids.len(),
                         "Loaded cached search index"
                     );
+                    let terms = Arc::new(terms);
+                    if let (Some(shared), Some(digest)) = (shared, digest) {
+                        shared
+                            .put_index(crate_name.clone(), digest, Arc::clone(&terms))
+                            .await;
+                    }
                     return Self { crate_name, terms };
                 }
 
@@ -267,6 +295,13 @@ impl TermIndex {
 
                 if let Some(digest) = digest {
                     Self::store(&terms, &index_path, digest).await;
+                }
+
+                let terms = Arc::new(terms);
+                if let (Some(shared), Some(digest)) = (shared, digest) {
+                    shared
+                        .put_index(crate_name.clone(), digest, Arc::clone(&terms))
+                        .await;
                 }
                 Self { crate_name, terms }
             })

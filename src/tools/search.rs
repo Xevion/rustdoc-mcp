@@ -142,7 +142,7 @@ pub async fn handle_search_structured(
         );
     };
 
-    let query_ctx = QueryContext::new(Arc::new(workspace_ctx));
+    let query_ctx = QueryContext::with_shared_cache(Arc::new(workspace_ctx), Arc::clone(state));
     Ok(run_search(&query_ctx, &request, false))
 }
 
